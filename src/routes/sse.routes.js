@@ -1,13 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { registerClient } = require('../events/sse');
-const { authenticate } = require('../middlewares/auth');
+const userAuth = require('../middlewares/user.auth');
 
-/**
- * SSE endpoint - client subscribes for real-time updates
- * GET /api/v1/events/stream
- */
-router.get('/stream', authenticate, (req, res) => {
+// SSE endpoint - real-time updates
+router.get('/stream', userAuth, (req, res) => {
   const userId = req.user.id.toString();
   registerClient(req, res, userId);
 });

@@ -1,58 +1,73 @@
 const { pool } = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
 
-/**
- * User Model - For Patients / End Users only
- */
-class UserModel {
-  async create(userData) {
-    const { uuid, full_name, mobile, email, gender, date_of_birth } = userData;
-    const [result] = await pool.query(
-      'INSERT INTO users (uuid, full_name, mobile, email, gender, date_of_birth) VALUES (?, ?, ?, ?, ?, ?)',
-      [uuid, full_name, mobile, email, gender, date_of_birth]
-    );
-    return result;
+// ─────────────────────────────────────────────
+// USER MODEL - Database queries for patients
+// ─────────────────────────────────────────────
+
+// Find user by mobile number
+const findByMobile = async (mobile) => {
+  const [rows] = await pool.query('SELECT * FROM users WHERE mobile = ?', [mobile]);
+  return rows[0] || null;
+};
+
+// Find user by id
+const findById = async (id) => {
+  const [rows] = await pool.query(
+    'SELECT id, uuid, full_name, mobile, email, gender, date_of_birth, blood_group, profile_photo, aadhaar_number, abha_number, is_verified, created_at FROM users WHERE id = ?',
+    [id]
+  );
+  return rows[0] || null;
+};
+
+// Create new user (only mobile at first)
+const create = async (mobile) => {
+  const uuid = uuidv4();
+  const [result] = await pool.query(
+    'INSERT INTO users (uuid, full_name, mobile) VALUES (?, ?, ?)',
+    [uuid, '', mobile]
+  );
+  return { id: result.insertId, uuid, mobile };
+};
+
+// Update basic profile
+const updateProfile = async (id, data) => {
+  const allowedFields = ['full_name', 'email', 'gender', 'date_of_birth'];
+  const fields = [];
+  const values = [];
+
+  for (const key of allowedFields) {
+    if (data[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      values.push(data[key]);
+    }
   }
 
-  async findByMobile(mobile) {
-    const [rows] = await pool.query('SELECT * FROM users WHERE mobile = ?', [mobile]);
-    return rows[0] || null;
-  }
+  if (fields.length === 0) return null;
 
-  async findById(id) {
-    const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
-    return rows[0] || null;
-  }
+  values.push(id);
+  const [result] = await pool.query(
+    `UPDATE users SET ${fields.join(', ')} WHERE id = ?`,
+    values
+  );
+  return result;
+};
 
-  async findByUuid(uuid) {
-    const [rows] = await pool.query('SELECT * FROM users WHERE uuid = ?', [uuid]);
-    return rows[0] || null;
-  }
+// Update FCM token
+const updateFcmToken = async (id, fcmToken) => {
+  await pool.query('UPDATE users SET fcm_token = ? WHERE id = ?', [fcmToken, id]);
+};
 
-  async updateProfile(id, data) {
-    const fields = Object.keys(data).map((key) => `${key} = ?`).join(', ');
-    const values = Object.values(data);
-    const [result] = await pool.query(
-      `UPDATE users SET ${fields} WHERE id = ?`,
-      [...values, id]
-    );
-    return result;
-  }
+// Mark user verified
+const markVerified = async (id) => {
+  await pool.query('UPDATE users SET is_verified = 1 WHERE id = ?', [id]);
+};
 
-  async updateFcmToken(id, fcmToken) {
-    const [result] = await pool.query(
-      'UPDATE users SET fcm_token = ? WHERE id = ?',
-      [fcmToken, id]
-    );
-    return result;
-  }
-
-  async verifyUser(id) {
-    const [result] = await pool.query(
-      'UPDATE users SET is_verified = 1 WHERE id = ?',
-      [id]
-    );
-    return result;
-  }
-}
-
-module.exports = new UserModel();
+module.exports = {
+  findByMobile,
+  findById,
+  create,
+  updateProfile,
+  updateFcmToken,
+  markVerified,
+};
