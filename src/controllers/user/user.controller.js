@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const userModel = require('../models/user.model');
+const userModel = require('../../models/user/user.model');
 
 // ─────────────────────────────────────────────
 // USER CONTROLLER - Patient APIs
@@ -11,14 +11,11 @@ const STATIC_OTP = '111111';
 /**
  * POST /api/v1/user/send-otp
  * Body: { mobile }
- * - If user exists, send OTP
- * - If user not exists, create user then send OTP
  */
 const sendOtp = async (req, res) => {
   try {
     const { mobile } = req.body;
 
-    // Validate mobile
     if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
       return res.status(400).json({
         success: false,
@@ -26,16 +23,12 @@ const sendOtp = async (req, res) => {
       });
     }
 
-    // Check if user exists
     let user = await userModel.findByMobile(mobile);
 
-    // If not exists, create new user
     if (!user) {
       await userModel.create(mobile);
     }
 
-    // In production: send actual OTP via SMS
-    // For now: static OTP 111111
     console.log(`📱 OTP for ${mobile}: ${STATIC_OTP}`);
 
     return res.status(200).json({
@@ -55,15 +48,11 @@ const sendOtp = async (req, res) => {
 /**
  * POST /api/v1/user/verify-otp
  * Body: { mobile, otp, fcm_token }
- * - Verify OTP (static 111111)
- * - Save FCM token
- * - Return JWT + is_new_user flag
  */
 const verifyOtp = async (req, res) => {
   try {
     const { mobile, otp, fcm_token } = req.body;
 
-    // Validate
     if (!mobile || !otp) {
       return res.status(400).json({
         success: false,
@@ -71,7 +60,6 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    // Verify static OTP
     if (otp !== STATIC_OTP) {
       return res.status(400).json({
         success: false,
@@ -79,7 +67,6 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    // Find user
     const user = await userModel.findByMobile(mobile);
     if (!user) {
       return res.status(404).json({
@@ -88,18 +75,14 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    // Mark verified
     await userModel.markVerified(user.id);
 
-    // Save FCM token if provided
     if (fcm_token) {
       await userModel.updateFcmToken(user.id, fcm_token);
     }
 
-    // Check if new user (no name means profile not completed)
     const is_new_user = !user.full_name || user.full_name.trim() === '';
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: user.id, uuid: user.uuid, role: 'user' },
       process.env.JWT_SECRET,
@@ -142,7 +125,6 @@ const updateProfile = async (req, res) => {
     const userId = req.user.id;
     const { full_name, email, gender, date_of_birth } = req.body;
 
-    // At least name is required
     if (!full_name || full_name.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -150,7 +132,6 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    // Update profile
     await userModel.updateProfile(userId, {
       full_name: full_name.trim(),
       email: email || null,
@@ -158,7 +139,6 @@ const updateProfile = async (req, res) => {
       date_of_birth: date_of_birth || null,
     });
 
-    // Get updated user
     const user = await userModel.findById(userId);
 
     return res.status(200).json({

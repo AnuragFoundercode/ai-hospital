@@ -18,7 +18,6 @@ const userAuth = (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Check if token is for user (patient)
     if (decoded.role !== 'user') {
       return res.status(403).json({
         success: false,
@@ -26,7 +25,7 @@ const userAuth = (req, res, next) => {
       });
     }
 
-    req.user = decoded; // { id, uuid, role }
+    req.user = decoded;
     next();
   } catch (error) {
     return res.status(401).json({

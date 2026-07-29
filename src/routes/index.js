@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 
-const userRoutes = require('./user.routes');
-const sseRoutes = require('./sse.routes');
+// Panel-wise routes
+const userRoutes = require('./user/user.routes');
+const userSseRoutes = require('./user/sse.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -13,8 +14,13 @@ router.get('/health', (req, res) => {
   });
 });
 
-// Module routes
+// User (Patient) panel
 router.use('/user', userRoutes);
-router.use('/events', sseRoutes);
+router.use('/user/events', userSseRoutes);
+
+// Future panels will be added here:
+// router.use('/doctor', doctorRoutes);
+// router.use('/pharmacy', pharmacyRoutes);
+// router.use('/admin', adminRoutes);
 
 module.exports = router;
