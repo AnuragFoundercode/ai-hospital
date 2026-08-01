@@ -5,6 +5,7 @@ const router = express.Router();
 const userRoutes = require('./user/user.routes');
 const userSseRoutes = require('./user/sse.routes');
 const doctorRoutes = require('./doctor/doctor.routes');
+const labRoutes = require('./lab/lab.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -21,6 +22,9 @@ router.use('/user/events', userSseRoutes);
 
 // Doctor panel
 router.use('/doctor', doctorRoutes);
+
+// Lab panel
+router.use('/lab', labRoutes);
 
 // Future panels will be added here:
 // router.use('/pharmacy', pharmacyRoutes);

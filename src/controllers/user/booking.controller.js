@@ -1,8 +1,10 @@
 const bookingModel = require('../../models/user/booking.model');
 const doctorModel = require('../../models/user/doctor.model');
+const labModel = require('../../models/user/lab.model');
 const paytmService = require('../../services/paytm.service');
 const paytmConfig = require('../../config/paytm');
 const bookingNotification = require('../../services/booking.notification');
+const { pool } = require('../../config/database');
 
 // ─────────────────────────────────────────────
 // BOOKING CONTROLLER - For patient app
@@ -742,8 +744,155 @@ const getAppointmentDetail = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/v1/user/booking/lab
+ * Body: { lab_id, test_ids, booking_date, collection_type, address_id, user_notes, attachments }
+ * collection_type: "home" | "walk_in"
+ */
+const createLabBooking = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { lab_id, test_ids, booking_date, collection_type, address_id, user_notes, attachments } = req.body;
+
+    // Validate
+    if (!lab_id || !test_ids || !test_ids.length) {
+      return res.status(400).json({ success: false, message: 'lab_id and test_ids are required.' });
+    }
+
+    if (!booking_date) {
+      return res.status(400).json({ success: false, message: 'booking_date is required.' });
+    }
+
+    // Find lab
+    const lab = await labModel.findByUuid(lab_id);
+    if (!lab) {
+      return res.status(404).json({ success: false, message: 'Lab not found.' });
+    }
+
+    // Get test pricing for this lab
+    const [testPricing] = await pool.query(
+      `SELECT ltp.test_id, ltp.price, ltp.discount_percent, lt.name as test_name
+       FROM lab_test_pricing ltp
+       JOIN lab_tests lt ON ltp.test_id = lt.id
+       WHERE ltp.pathology_lab_id = ? AND ltp.test_id IN (?) AND ltp.is_available = 1`,
+      [lab.id, test_ids]
+    );
+
+    if (!testPricing.length) {
+      return res.status(400).json({ success: false, message: 'Selected tests not available at this lab.' });
+    }
+
+    // Calculate total amount
+    let baseAmount = 0;
+    let totalDiscount = 0;
+    const testsBooked = [];
+
+    for (const tp of testPricing) {
+      const price = parseFloat(tp.price);
+      const discount = price * (parseFloat(tp.discount_percent) / 100);
+      baseAmount += price;
+      totalDiscount += discount;
+      testsBooked.push({ id: tp.test_id, name: tp.test_name, price, discount });
+    }
+
+    const finalAmount = baseAmount - totalDiscount;
+
+    // Create booking
+    const booking = await bookingModel.create({
+      user_id: userId,
+      service_type: 'pathology_test',
+      provider_id: lab.id,
+      status: 'pending',
+      booking_date,
+      slot_start_time: null,
+      slot_end_time: null,
+      base_amount: baseAmount,
+      discount_amount: totalDiscount,
+      tax_amount: 0,
+      final_amount: finalAmount,
+      payment_status: 'unpaid',
+      payment_method: null,
+      metadata: {
+        lab_name: lab.name,
+        collection_type: collection_type || 'home',
+        address_id: address_id || null,
+        tests: testsBooked,
+        attachments: attachments || [],
+      },
+      user_notes: user_notes || null,
+    });
+
+    await bookingModel.addStatusHistory(booking.id, null, 'pending', 'user', userId, 'Lab test booking created');
+
+    // Initiate Paytm
+    let paytmData = null;
+    try {
+      const paytmResponse = await paytmService.initiateTransaction(booking.booking_id, finalAmount, userId);
+
+      if (paytmResponse.body && paytmResponse.body.txnToken) {
+        paytmData = {
+          txn_token: paytmResponse.body.txnToken,
+          order_id: booking.booking_id,
+          mid: paytmConfig.mid,
+          amount: finalAmount.toFixed(2),
+          callback_url: paytmConfig.callbackUrl,
+          website: paytmConfig.website,
+          base_url: paytmConfig.baseUrl,
+        };
+      } else {
+        paytmData = {
+          txn_token: null,
+          order_id: booking.booking_id,
+          mid: paytmConfig.mid,
+          amount: finalAmount.toFixed(2),
+          callback_url: paytmConfig.callbackUrl,
+          website: paytmConfig.website,
+          base_url: paytmConfig.baseUrl,
+          error: paytmResponse.body?.resultInfo?.resultMsg || 'Token generation failed',
+        };
+      }
+    } catch (paytmError) {
+      paytmData = {
+        txn_token: null,
+        order_id: booking.booking_id,
+        mid: paytmConfig.mid,
+        amount: finalAmount.toFixed(2),
+        callback_url: paytmConfig.callbackUrl,
+        website: paytmConfig.website,
+        base_url: paytmConfig.baseUrl,
+        error: paytmError.message,
+      };
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Lab booking created. Please complete payment.',
+      data: {
+        booking_id: booking.booking_id,
+        lab_name: lab.name,
+        collection_type: collection_type || 'home',
+        date: booking_date,
+        tests: testsBooked,
+        amount: {
+          base: baseAmount,
+          discount: totalDiscount,
+          tax: 0,
+          total: finalAmount,
+        },
+        status: 'pending',
+        payment_status: 'unpaid',
+        payment: paytmData,
+      },
+    });
+  } catch (error) {
+    console.error('createLabBooking error:', error.message);
+    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   createDoctorBooking,
+  createLabBooking,
   confirmPayment,
   paytmCallback,
   verifyPayment,

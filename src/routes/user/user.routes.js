@@ -3,6 +3,7 @@ const router = express.Router();
 const userController = require('../../controllers/user/user.controller');
 const doctorController = require('../../controllers/user/doctor.controller');
 const bookingController = require('../../controllers/user/booking.controller');
+const labController = require('../../controllers/user/lab.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -25,6 +26,7 @@ router.get('/doctor/:id/slots', userAuth, doctorController.getDoctorSlots);
 
 // Booking APIs (token required)
 router.post('/booking/doctor', userAuth, bookingController.createDoctorBooking);
+router.post('/booking/lab', userAuth, bookingController.createLabBooking);
 router.post('/booking/:booking_id/pay', userAuth, bookingController.confirmPayment);
 router.post('/booking/:booking_id/verify-payment', userAuth, bookingController.verifyPayment);
 router.get('/bookings', userAuth, bookingController.getMyBookings);
@@ -36,5 +38,11 @@ router.get('/appointment/:booking_id', userAuth, bookingController.getAppointmen
 
 // Paytm callback (no auth - Paytm calls this)
 router.post('/booking/paytm/callback', bookingController.paytmCallback);
+
+// Lab APIs (token required)
+router.get('/lab-test-categories', userAuth, labController.getTestCategories);
+router.get('/lab-tests', userAuth, labController.searchTests);
+router.get('/labs', userAuth, labController.getLabList);
+router.get('/lab/:id', userAuth, labController.getLabDetail);
 
 module.exports = router;
