@@ -10,7 +10,6 @@ const labRoutes = require('./lab/lab.routes');
 // Health check
 router.get('/health', (req, res) => {
   res.json({
-    success: true,
     message: 'AI Hospital API is running',
     timestamp: new Date().toISOString(),
   });

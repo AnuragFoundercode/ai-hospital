@@ -41,9 +41,7 @@ const getDashboard = async (req, res) => {
     // Wallet balance
     const wallet = await walletModel.getWallet(doctorId);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Dashboard fetched.',
+    return res.status(200).json({      message: 'Dashboard fetched.',
       data: {
         today_appointments: todayAppts[0].count,
         today_patients: todayPatients[0].count,
@@ -58,7 +56,7 @@ const getDashboard = async (req, res) => {
     });
   } catch (error) {
     console.error('getDashboard error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -71,9 +69,7 @@ const getWallet = async (req, res) => {
     const doctorId = req.doctor.id;
     const wallet = await walletModel.getWallet(doctorId);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Wallet fetched.',
+    return res.status(200).json({      message: 'Wallet fetched.',
       data: {
         balance: wallet.balance,
         total_earned: wallet.total_earned,
@@ -82,7 +78,7 @@ const getWallet = async (req, res) => {
     });
   } catch (error) {
     console.error('getWallet error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -107,9 +103,7 @@ const getTransactions = async (req, res) => {
       created_at: t.created_at,
     }));
 
-    return res.status(200).json({
-      success: true,
-      message: 'Transactions fetched.',
+    return res.status(200).json({      message: 'Transactions fetched.',
       data: transactions,
       pagination: {
         page: result.page,
@@ -120,7 +114,7 @@ const getTransactions = async (req, res) => {
     });
   } catch (error) {
     console.error('getTransactions error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -135,13 +129,13 @@ const requestWithdrawal = async (req, res) => {
     const { amount, remarks } = req.body;
 
     if (!amount || amount <= 0) {
-      return res.status(400).json({ success: false, message: 'Valid amount required.' });
+      return res.status(400).json({ message: 'Valid amount required.' });
     }
 
     // Check balance
     const wallet = await walletModel.getWallet(doctorId);
     if (parseFloat(wallet.balance) < parseFloat(amount)) {
-      return res.status(400).json({ success: false, message: 'Insufficient wallet balance.' });
+      return res.status(400).json({ message: 'Insufficient wallet balance.' });
     }
 
     // Debit from wallet
@@ -156,9 +150,7 @@ const requestWithdrawal = async (req, res) => {
     // Create withdrawal request for admin
     const withdrawal = await walletModel.createWithdrawal(doctorId, amount, remarks);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Withdrawal request submitted. Admin will process it.',
+    return res.status(200).json({      message: 'Withdrawal request submitted. Admin will process it.',
       data: {
         withdrawal_id: withdrawal.id,
         amount,
@@ -168,7 +160,7 @@ const requestWithdrawal = async (req, res) => {
     });
   } catch (error) {
     console.error('requestWithdrawal error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -193,9 +185,7 @@ const getWithdrawals = async (req, res) => {
       created_at: w.created_at,
     }));
 
-    return res.status(200).json({
-      success: true,
-      message: 'Withdrawals fetched.',
+    return res.status(200).json({      message: 'Withdrawals fetched.',
       data: withdrawals,
       pagination: {
         page: result.page,
@@ -206,7 +196,7 @@ const getWithdrawals = async (req, res) => {
     });
   } catch (error) {
     console.error('getWithdrawals error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

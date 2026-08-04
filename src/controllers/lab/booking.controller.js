@@ -61,15 +61,13 @@ const getBookings = async (req, res) => {
       };
     });
 
-    return res.status(200).json({
-      success: true,
-      message: 'Bookings fetched.',
+    return res.status(200).json({      message: 'Bookings fetched.',
       data: bookings,
       pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) },
     });
   } catch (error) {
     console.error('lab getBookings error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -89,13 +87,13 @@ const acceptBooking = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
+      return res.status(404).json({ message: 'Booking not found.' });
     }
 
     const booking = rows[0];
 
     if (booking.status !== 'confirmed' && booking.status !== 'pending') {
-      return res.status(400).json({ success: false, message: `Cannot accept booking in '${booking.status}' status.` });
+      return res.status(400).json({ message: `Cannot accept booking in '${booking.status}' status.` });
     }
 
     // Update status
@@ -130,14 +128,12 @@ const acceptBooking = async (req, res) => {
       [booking.user_id, `Your lab test booking has been accepted by ${metadata.lab_name || 'Lab'}.`, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Booking accepted. User notified.',
+    return res.status(200).json({      message: 'Booking accepted. User notified.',
       data: { booking_id, status: 'assigned' },
     });
   } catch (error) {
     console.error('lab acceptBooking error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -158,13 +154,13 @@ const rejectBooking = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
+      return res.status(404).json({ message: 'Booking not found.' });
     }
 
     const booking = rows[0];
 
     if (booking.status === 'completed' || booking.status === 'cancelled') {
-      return res.status(400).json({ success: false, message: `Cannot reject booking in '${booking.status}' status.` });
+      return res.status(400).json({ message: `Cannot reject booking in '${booking.status}' status.` });
     }
 
     // Update status
@@ -203,14 +199,12 @@ const rejectBooking = async (req, res) => {
       [booking.user_id, `Your lab test was rejected. Reason: ${reason || 'Not available'}. Refund will be processed.`, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Booking rejected. User notified.',
+    return res.status(200).json({      message: 'Booking rejected. User notified.',
       data: { booking_id, status: 'cancelled', reason: reason || 'Rejected by lab' },
     });
   } catch (error) {
     console.error('lab rejectBooking error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -229,13 +223,13 @@ const startProcessing = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
+      return res.status(404).json({ message: 'Booking not found.' });
     }
 
     const booking = rows[0];
 
     if (booking.status !== 'assigned') {
-      return res.status(400).json({ success: false, message: `Cannot start processing in '${booking.status}' status. Accept booking first.` });
+      return res.status(400).json({ message: `Cannot start processing in '${booking.status}' status. Accept booking first.` });
     }
 
     await pool.query("UPDATE bookings SET status = 'in_progress' WHERE id = ?", [booking.id]);
@@ -263,14 +257,12 @@ const startProcessing = async (req, res) => {
       [booking.user_id, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Test processing started. User notified.',
+    return res.status(200).json({      message: 'Test processing started. User notified.',
       data: { booking_id, status: 'in_progress' },
     });
   } catch (error) {
     console.error('lab startProcessing error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -289,13 +281,13 @@ const completeBooking = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
+      return res.status(404).json({ message: 'Booking not found.' });
     }
 
     const booking = rows[0];
 
     if (booking.status === 'completed') {
-      return res.status(400).json({ success: false, message: 'Already completed.' });
+      return res.status(400).json({ message: 'Already completed.' });
     }
 
     // Update status
@@ -325,14 +317,12 @@ const completeBooking = async (req, res) => {
       [booking.user_id, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Test completed. Amount credited to wallet.',
+    return res.status(200).json({      message: 'Test completed. Amount credited to wallet.',
       data: { booking_id, status: 'completed' },
     });
   } catch (error) {
     console.error('lab completeBooking error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -348,7 +338,7 @@ const uploadReport = async (req, res) => {
     const { reports } = req.body;
 
     if (!reports || !reports.length) {
-      return res.status(400).json({ success: false, message: 'At least one report URL required.' });
+      return res.status(400).json({ message: 'At least one report URL required.' });
     }
 
     const [rows] = await pool.query(
@@ -357,7 +347,7 @@ const uploadReport = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found.' });
+      return res.status(404).json({ message: 'Booking not found.' });
     }
 
     const booking = rows[0];
@@ -387,14 +377,12 @@ const uploadReport = async (req, res) => {
       [booking.user_id, `Your lab test report for booking ${booking_id} is ready.`, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Report uploaded. User notified.',
+    return res.status(200).json({      message: 'Report uploaded. User notified.',
       data: { booking_id, reports: metadata.reports },
     });
   } catch (error) {
     console.error('lab uploadReport error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

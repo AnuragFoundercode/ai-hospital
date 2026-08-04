@@ -28,27 +28,21 @@ const createDoctorBooking = async (req, res) => {
 
     // Validate input
     if (!doctor_id || !slot_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'doctor_id and slot_id are required.',
+      return res.status(400).json({        message: 'doctor_id and slot_id are required.',
       });
     }
 
     // Find doctor
     const doctor = await doctorModel.findByUuid(doctor_id);
     if (!doctor) {
-      return res.status(404).json({
-        success: false,
-        message: 'Doctor not found.',
+      return res.status(404).json({        message: 'Doctor not found.',
       });
     }
 
     // Parse slot_id → "2026-07-29_0900" → date: "2026-07-29", time: "09:00"
     const parts = slot_id.split('_');
     if (parts.length !== 2) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid slot_id format.',
+      return res.status(400).json({        message: 'Invalid slot_id format.',
       });
     }
 
@@ -59,18 +53,14 @@ const createDoctorBooking = async (req, res) => {
     // Validate date is not in past
     const today = new Date().toISOString().split('T')[0];
     if (bookingDate < today) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot book for past dates.',
+      return res.status(400).json({        message: 'Cannot book for past dates.',
       });
     }
 
     // Check if slot is already booked
     const isBooked = await bookingModel.isSlotBooked('doctor_consultation', doctor.id, bookingDate, slotTime);
     if (isBooked) {
-      return res.status(409).json({
-        success: false,
-        message: 'This slot is already booked. Please choose another slot.',
+      return res.status(409).json({        message: 'This slot is already booked. Please choose another slot.',
       });
     }
 
@@ -79,9 +69,7 @@ const createDoctorBooking = async (req, res) => {
     const matchedSlot = slots.find((s) => s.time === slotTime);
 
     if (!matchedSlot) {
-      return res.status(400).json({
-        success: false,
-        message: 'Doctor is not available at this time on selected date.',
+      return res.status(400).json({        message: 'Doctor is not available at this time on selected date.',
       });
     }
 
@@ -164,9 +152,7 @@ const createDoctorBooking = async (req, res) => {
       };
     }
 
-    return res.status(201).json({
-      success: true,
-      message: 'Booking created. Please complete payment.',
+    return res.status(201).json({      message: 'Booking created. Please complete payment.',
       data: {
         booking_id: booking.booking_id,
         doctor_name: doctor.full_name,
@@ -189,9 +175,7 @@ const createDoctorBooking = async (req, res) => {
     });
   } catch (error) {
     console.error('createDoctorBooking error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -214,42 +198,32 @@ const confirmPayment = async (req, res) => {
     const { payment_method, transaction_id } = req.body;
 
     if (!payment_method || !transaction_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'payment_method and transaction_id required.',
+      return res.status(400).json({        message: 'payment_method and transaction_id required.',
       });
     }
 
     // Find booking
     const booking = await bookingModel.findByBookingId(booking_id);
     if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found.',
+      return res.status(404).json({        message: 'Booking not found.',
       });
     }
 
     // Check ownership
     if (booking.user_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not your booking.',
+      return res.status(403).json({        message: 'Not your booking.',
       });
     }
 
     // Check if already paid
     if (booking.payment_status === 'paid') {
-      return res.status(400).json({
-        success: false,
-        message: 'Already paid.',
+      return res.status(400).json({        message: 'Already paid.',
       });
     }
 
     // Check status
     if (booking.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Booking cannot be paid in current status.',
+      return res.status(400).json({        message: 'Booking cannot be paid in current status.',
       });
     }
 
@@ -267,9 +241,7 @@ const confirmPayment = async (req, res) => {
     const updatedBooking = await bookingModel.findByBookingId(booking_id);
     bookingNotification.sendBookingConfirmedNotification(updatedBooking);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Payment successful. Booking confirmed!',
+    return res.status(200).json({      message: 'Payment successful. Booking confirmed!',
       data: {
         booking_id,
         status: 'confirmed',
@@ -280,9 +252,7 @@ const confirmPayment = async (req, res) => {
     });
   } catch (error) {
     console.error('confirmPayment error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -317,9 +287,7 @@ const getMyBookings = async (req, res) => {
       created_at: b.created_at,
     }));
 
-    return res.status(200).json({
-      success: true,
-      message: 'Bookings fetched.',
+    return res.status(200).json({      message: 'Bookings fetched.',
       data: bookings,
       pagination: {
         page: result.page,
@@ -330,9 +298,7 @@ const getMyBookings = async (req, res) => {
     });
   } catch (error) {
     console.error('getMyBookings error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -348,24 +314,18 @@ const getBookingDetail = async (req, res) => {
 
     const booking = await bookingModel.findByBookingId(booking_id);
     if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found.',
+      return res.status(404).json({        message: 'Booking not found.',
       });
     }
 
     if (booking.user_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not your booking.',
+      return res.status(403).json({        message: 'Not your booking.',
       });
     }
 
     const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
 
-    return res.status(200).json({
-      success: true,
-      message: 'Booking detail fetched.',
+    return res.status(200).json({      message: 'Booking detail fetched.',
       data: {
         booking_id: booking.booking_id,
         service_type: booking.service_type,
@@ -392,9 +352,7 @@ const getBookingDetail = async (req, res) => {
     });
   } catch (error) {
     console.error('getBookingDetail error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -411,9 +369,7 @@ const paytmCallback = async (req, res) => {
     // Verify checksum
     const isValid = paytmService.verifyChecksum(paytmParams);
     if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid checksum. Payment verification failed.',
+      return res.status(400).json({        message: 'Invalid checksum. Payment verification failed.',
       });
     }
 
@@ -425,9 +381,7 @@ const paytmCallback = async (req, res) => {
     // Find booking
     const booking = await bookingModel.findByBookingId(orderId);
     if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found.',
+      return res.status(404).json({        message: 'Booking not found.',
       });
     }
 
@@ -445,9 +399,7 @@ const paytmCallback = async (req, res) => {
       const updatedBooking = await bookingModel.findByBookingId(orderId);
       bookingNotification.sendBookingConfirmedNotification(updatedBooking);
 
-      return res.status(200).json({
-        success: true,
-        message: 'Payment successful. Booking confirmed.',
+      return res.status(200).json({        message: 'Payment successful. Booking confirmed.',
         data: {
           booking_id: orderId,
           status: 'confirmed',
@@ -459,9 +411,7 @@ const paytmCallback = async (req, res) => {
       // Payment failed
       await bookingModel.addStatusHistory(booking.id, 'pending', 'pending', 'system', null, `Paytm payment failed: ${txnStatus}`);
 
-      return res.status(200).json({
-        success: false,
-        message: 'Payment failed. Please try again.',
+      return res.status(200).json({        message: 'Payment failed. Please try again.',
         data: {
           booking_id: orderId,
           status: 'pending',
@@ -472,9 +422,7 @@ const paytmCallback = async (req, res) => {
     }
   } catch (error) {
     console.error('paytmCallback error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -490,17 +438,13 @@ const verifyPayment = async (req, res) => {
 
     const booking = await bookingModel.findByBookingId(booking_id);
     if (!booking || booking.user_id !== userId) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found.',
+      return res.status(404).json({        message: 'Booking not found.',
       });
     }
 
     // Already paid? Return success
     if (booking.payment_status === 'paid') {
-      return res.status(200).json({
-        success: true,
-        message: 'Payment already confirmed.',
+      return res.status(200).json({        message: 'Payment already confirmed.',
         data: { booking_id, status: booking.status, payment_status: 'paid' },
       });
     }
@@ -521,24 +465,18 @@ const verifyPayment = async (req, res) => {
 
         await bookingModel.addStatusHistory(booking.id, 'pending', 'confirmed', 'system', null, 'Payment verified via status check');
 
-        return res.status(200).json({
-          success: true,
-          message: 'Payment verified. Booking confirmed.',
+        return res.status(200).json({          message: 'Payment verified. Booking confirmed.',
           data: { booking_id, status: 'confirmed', payment_status: 'paid', transaction_id: txnId },
         });
       }
     }
 
-    return res.status(200).json({
-      success: false,
-      message: 'Payment not completed yet.',
+    return res.status(200).json({      message: 'Payment not completed yet.',
       data: { booking_id, status: 'pending', payment_status: 'unpaid' },
     });
   } catch (error) {
     console.error('verifyPayment error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -629,9 +567,7 @@ const getAppointments = async (req, res) => {
       return appointment;
     });
 
-    return res.status(200).json({
-      success: true,
-      message: `${type === 'upcoming' ? 'Upcoming' : 'Past'} appointments fetched.`,
+    return res.status(200).json({      message: `${type === 'upcoming' ? 'Upcoming' : 'Past'} appointments fetched.`,
       data: appointments,
       pagination: {
         page: result.page,
@@ -642,9 +578,7 @@ const getAppointments = async (req, res) => {
     });
   } catch (error) {
     console.error('getAppointments error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -667,10 +601,10 @@ const getAppointmentDetail = async (req, res) => {
 
     const booking = await bookingModel.findByBookingId(booking_id);
     if (!booking) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+      return res.status(404).json({ message: 'Appointment not found.' });
     }
     if (booking.user_id !== userId) {
-      return res.status(403).json({ success: false, message: 'Not your appointment.' });
+      return res.status(403).json({ message: 'Not your appointment.' });
     }
 
     const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
@@ -686,9 +620,7 @@ const getAppointmentDetail = async (req, res) => {
     );
     const doctor = doctorRows[0] || {};
 
-    return res.status(200).json({
-      success: true,
-      message: 'Appointment detail fetched.',
+    return res.status(200).json({      message: 'Appointment detail fetched.',
       data: {
         id: booking.booking_id,
         status: booking.status,
@@ -740,7 +672,7 @@ const getAppointmentDetail = async (req, res) => {
     });
   } catch (error) {
     console.error('getAppointmentDetail error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -756,17 +688,17 @@ const createLabBooking = async (req, res) => {
 
     // Validate
     if (!lab_id || !test_ids || !test_ids.length) {
-      return res.status(400).json({ success: false, message: 'lab_id and test_ids are required.' });
+      return res.status(400).json({ message: 'lab_id and test_ids are required.' });
     }
 
     if (!booking_date) {
-      return res.status(400).json({ success: false, message: 'booking_date is required.' });
+      return res.status(400).json({ message: 'booking_date is required.' });
     }
 
     // Find lab
     const lab = await labModel.findByUuid(lab_id);
     if (!lab) {
-      return res.status(404).json({ success: false, message: 'Lab not found.' });
+      return res.status(404).json({ message: 'Lab not found.' });
     }
 
     // Get test pricing for this lab
@@ -779,7 +711,7 @@ const createLabBooking = async (req, res) => {
     );
 
     if (!testPricing.length) {
-      return res.status(400).json({ success: false, message: 'Selected tests not available at this lab.' });
+      return res.status(400).json({ message: 'Selected tests not available at this lab.' });
     }
 
     // Calculate total amount
@@ -864,9 +796,7 @@ const createLabBooking = async (req, res) => {
       };
     }
 
-    return res.status(201).json({
-      success: true,
-      message: 'Lab booking created. Please complete payment.',
+    return res.status(201).json({      message: 'Lab booking created. Please complete payment.',
       data: {
         booking_id: booking.booking_id,
         lab_name: lab.name,
@@ -886,7 +816,7 @@ const createLabBooking = async (req, res) => {
     });
   } catch (error) {
     console.error('createLabBooking error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

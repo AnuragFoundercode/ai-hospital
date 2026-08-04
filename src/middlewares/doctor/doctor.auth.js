@@ -9,9 +9,7 @@ const doctorAuth = (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Token required. Please login.',
+      return res.status(401).json({        message: 'Token required. Please login.',
       });
     }
 
@@ -19,18 +17,14 @@ const doctorAuth = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     if (decoded.role !== 'doctor') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Doctor token required.',
+      return res.status(403).json({        message: 'Access denied. Doctor token required.',
       });
     }
 
     req.doctor = decoded; // { id, uuid, role }
     next();
   } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid or expired token.',
+    return res.status(401).json({      message: 'Invalid or expired token.',
     });
   }
 };

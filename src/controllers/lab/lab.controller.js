@@ -16,18 +16,18 @@ const register = async (req, res) => {
 
     // Validate required
     if (!name || !owner_name || !email || !password || !mobile || !lab_license_number || !address || !city || !state || !pincode) {
-      return res.status(400).json({ success: false, message: 'Required fields: name, owner_name, email, password, mobile, lab_license_number, address, city, state, pincode' });
+      return res.status(400).json({ message: 'Required fields: name, owner_name, email, password, mobile, lab_license_number, address, city, state, pincode' });
     }
 
     // Check duplicate email/mobile
     const existingEmail = await labModel.findByEmail(email);
     if (existingEmail) {
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
+      return res.status(409).json({ message: 'Email already registered.' });
     }
 
     const existingMobile = await labModel.findByMobile(mobile);
     if (existingMobile) {
-      return res.status(409).json({ success: false, message: 'Mobile already registered.' });
+      return res.status(409).json({ message: 'Mobile already registered.' });
     }
 
     // Register
@@ -37,9 +37,7 @@ const register = async (req, res) => {
       address, city, state, pincode, home_collection_available, opening_time, closing_time
     });
 
-    return res.status(201).json({
-      success: true,
-      message: 'Registration successful! Your account is pending admin approval.',
+    return res.status(201).json({      message: 'Registration successful! Your account is pending admin approval.',
       data: {
         id: lab.uuid,
         name,
@@ -49,7 +47,7 @@ const register = async (req, res) => {
     });
   } catch (error) {
     console.error('lab register error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -62,18 +60,18 @@ const login = async (req, res) => {
     const { email, password, fcm_token } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password required.' });
+      return res.status(400).json({ message: 'Email and password required.' });
     }
 
     const lab = await labModel.findByEmail(email);
     if (!lab) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return res.status(401).json({ message: 'Invalid email or password.' });
     }
 
     // Verify password
     const isValid = await labModel.verifyPassword(password, lab.password_hash);
     if (!isValid) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return res.status(401).json({ message: 'Invalid email or password.' });
     }
 
     // Save FCM
@@ -88,9 +86,7 @@ const login = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful.',
+    return res.status(200).json({      message: 'Login successful.',
       data: {
         token,
         lab: {
@@ -105,7 +101,7 @@ const login = async (req, res) => {
     });
   } catch (error) {
     console.error('lab login error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -118,12 +114,10 @@ const getProfile = async (req, res) => {
     const lab = await labModel.findById(labId);
 
     if (!lab) {
-      return res.status(404).json({ success: false, message: 'Lab not found.' });
+      return res.status(404).json({ message: 'Lab not found.' });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Profile fetched.',
+    return res.status(200).json({      message: 'Profile fetched.',
       data: {
         id: lab.uuid,
         name: lab.name,
@@ -164,7 +158,7 @@ const getProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('lab getProfile error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -180,21 +174,19 @@ const updateProfile = async (req, res) => {
     if (req.body.mobile) {
       const existing = await labModel.findByMobile(req.body.mobile);
       if (existing && existing.id !== labId) {
-        return res.status(409).json({ success: false, message: 'Mobile number already in use by another lab.' });
+        return res.status(409).json({ message: 'Mobile number already in use by another lab.' });
       }
     }
 
     await labModel.updateProfile(labId, req.body);
     const lab = await labModel.findById(labId);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Profile updated.',
+    return res.status(200).json({      message: 'Profile updated.',
       data: { id: lab.uuid, name: lab.name, verification_status: lab.verification_status },
     });
   } catch (error) {
     console.error('lab updateProfile error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -208,28 +200,28 @@ const changePassword = async (req, res) => {
     const { current_password, new_password } = req.body;
 
     if (!current_password || !new_password) {
-      return res.status(400).json({ success: false, message: 'Current password and new password required.' });
+      return res.status(400).json({ message: 'Current password and new password required.' });
     }
 
     if (new_password.length < 6) {
-      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+      return res.status(400).json({ message: 'New password must be at least 6 characters.' });
     }
 
     const lab = await labModel.findById(labId);
 
     const isValid = await bcrypt.compare(current_password, lab.password_hash);
     if (!isValid) {
-      return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
+      return res.status(400).json({ message: 'Current password is incorrect.' });
     }
 
     const hashedPassword = await bcrypt.hash(new_password, 10);
     const { pool } = require('../../config/database');
     await pool.query('UPDATE pathology_labs SET password_hash = ? WHERE id = ?', [hashedPassword, labId]);
 
-    return res.status(200).json({ success: true, message: 'Password changed successfully.' });
+    return res.status(200).json({ message: 'Password changed successfully.' });
   } catch (error) {
     console.error('lab changePassword error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -243,26 +235,24 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({ success: false, message: 'Email required.' });
+      return res.status(400).json({ message: 'Email required.' });
     }
 
     const lab = await labModel.findByEmail(email);
     if (!lab) {
-      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+      return res.status(404).json({ message: 'No account found with this email.' });
     }
 
     // In production: send OTP to registered mobile/email
     // For now: static OTP 111111
     console.log(`📱 Lab forgot password OTP for ${lab.mobile}: 111111`);
 
-    return res.status(200).json({
-      success: true,
-      message: 'OTP sent to registered mobile number.',
+    return res.status(200).json({      message: 'OTP sent to registered mobile number.',
       data: { email, mobile: lab.mobile.replace(/(\d{2})\d{6}(\d{2})/, '$1******$2') },
     });
   } catch (error) {
     console.error('lab forgotPassword error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -275,30 +265,30 @@ const resetPassword = async (req, res) => {
     const { email, otp, new_password } = req.body;
 
     if (!email || !otp || !new_password) {
-      return res.status(400).json({ success: false, message: 'Email, OTP, and new password required.' });
+      return res.status(400).json({ message: 'Email, OTP, and new password required.' });
     }
 
     if (otp !== '111111') {
-      return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+      return res.status(400).json({ message: 'Invalid OTP.' });
     }
 
     if (new_password.length < 6) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+      return res.status(400).json({ message: 'Password must be at least 6 characters.' });
     }
 
     const lab = await labModel.findByEmail(email);
     if (!lab) {
-      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+      return res.status(404).json({ message: 'No account found with this email.' });
     }
 
     const hashedPassword = await bcrypt.hash(new_password, 10);
     const { pool } = require('../../config/database');
     await pool.query('UPDATE pathology_labs SET password_hash = ? WHERE id = ?', [hashedPassword, lab.id]);
 
-    return res.status(200).json({ success: true, message: 'Password reset successfully. Please login.' });
+    return res.status(200).json({ message: 'Password reset successfully. Please login.' });
   } catch (error) {
     console.error('lab resetPassword error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

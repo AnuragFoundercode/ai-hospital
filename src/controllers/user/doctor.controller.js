@@ -40,9 +40,7 @@ const getDoctorList = async (req, res) => {
 
     const totalPages = Math.ceil(result.total / result.limit);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Doctors fetched.',
+    return res.status(200).json({      message: 'Doctors fetched.',
       data: doctors,
       pagination: {
         page: result.page,
@@ -53,9 +51,7 @@ const getDoctorList = async (req, res) => {
     });
   } catch (error) {
     console.error('getDoctorList error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -67,16 +63,12 @@ const getDoctorCategories = async (req, res) => {
   try {
     const categories = await doctorCategoryModel.getAll();
 
-    return res.status(200).json({
-      success: true,
-      message: 'Doctor categories fetched.',
+    return res.status(200).json({      message: 'Doctor categories fetched.',
       data: categories,
     });
   } catch (error) {
     console.error('getDoctorCategories error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -93,9 +85,7 @@ const getDoctorProfile = async (req, res) => {
     const doctor = await doctorModel.findByUuid(id);
 
     if (!doctor) {
-      return res.status(404).json({
-        success: false,
-        message: 'Doctor not found.',
+      return res.status(404).json({        message: 'Doctor not found.',
       });
     }
 
@@ -128,9 +118,7 @@ const getDoctorProfile = async (req, res) => {
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Doctor profile fetched.',
+    return res.status(200).json({      message: 'Doctor profile fetched.',
       data: {
         id: doctor.uuid,
         name: doctor.full_name,
@@ -155,9 +143,7 @@ const getDoctorProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('getDoctorProfile error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -172,18 +158,14 @@ const getDoctorSlots = async (req, res) => {
     const { date } = req.query;
 
     if (!date) {
-      return res.status(400).json({
-        success: false,
-        message: 'Date is required. Format: YYYY-MM-DD',
+      return res.status(400).json({        message: 'Date is required. Format: YYYY-MM-DD',
       });
     }
 
     // Find doctor
     const doctor = await doctorModel.findByUuid(id);
     if (!doctor) {
-      return res.status(404).json({
-        success: false,
-        message: 'Doctor not found.',
+      return res.status(404).json({        message: 'Doctor not found.',
       });
     }
 
@@ -194,9 +176,7 @@ const getDoctorSlots = async (req, res) => {
     const available_slots = slots.filter((s) => !s.is_booked);
     const booked_slots = slots.filter((s) => s.is_booked);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Slots fetched.',
+    return res.status(200).json({      message: 'Slots fetched.',
       data: {
         doctor_id: doctor.uuid,
         doctor_name: doctor.full_name,
@@ -209,9 +189,7 @@ const getDoctorSlots = async (req, res) => {
     });
   } catch (error) {
     console.error('getDoctorSlots error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };

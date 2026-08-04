@@ -17,9 +17,7 @@ const sendOtp = async (req, res) => {
     const { mobile } = req.body;
 
     if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid 10-digit mobile number required.',
+      return res.status(400).json({        message: 'Valid 10-digit mobile number required.',
       });
     }
 
@@ -31,16 +29,12 @@ const sendOtp = async (req, res) => {
 
     console.log(`📱 OTP for ${mobile}: ${STATIC_OTP}`);
 
-    return res.status(200).json({
-      success: true,
-      message: 'OTP sent successfully.',
+    return res.status(200).json({      message: 'OTP sent successfully.',
       data: { mobile },
     });
   } catch (error) {
     console.error('sendOtp error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -54,24 +48,18 @@ const verifyOtp = async (req, res) => {
     const { mobile, otp, fcm_token } = req.body;
 
     if (!mobile || !otp) {
-      return res.status(400).json({
-        success: false,
-        message: 'Mobile and OTP required.',
+      return res.status(400).json({        message: 'Mobile and OTP required.',
       });
     }
 
     if (otp !== STATIC_OTP) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid OTP.',
+      return res.status(400).json({        message: 'Invalid OTP.',
       });
     }
 
     const user = await userModel.findByMobile(mobile);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found. Please send OTP first.',
+      return res.status(404).json({        message: 'User not found. Please send OTP first.',
       });
     }
 
@@ -89,9 +77,7 @@ const verifyOtp = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: is_new_user ? 'OTP verified. Please complete your profile.' : 'Login successful.',
+    return res.status(200).json({      message: is_new_user ? 'OTP verified. Please complete your profile.' : 'Login successful.',
       data: {
         token,
         is_new_user,
@@ -108,9 +94,7 @@ const verifyOtp = async (req, res) => {
     });
   } catch (error) {
     console.error('verifyOtp error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -126,9 +110,7 @@ const updateProfile = async (req, res) => {
     const { full_name, email, gender, date_of_birth } = req.body;
 
     if (!full_name || full_name.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        message: 'Full name is required.',
+      return res.status(400).json({        message: 'Full name is required.',
       });
     }
 
@@ -141,9 +123,7 @@ const updateProfile = async (req, res) => {
 
     const user = await userModel.findById(userId);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Profile updated successfully.',
+    return res.status(200).json({      message: 'Profile updated successfully.',
       data: {
         id: user.uuid,
         full_name: user.full_name,
@@ -156,9 +136,7 @@ const updateProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('updateProfile error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };
@@ -173,15 +151,11 @@ const getProfile = async (req, res) => {
     const user = await userModel.findById(userId);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found.',
+      return res.status(404).json({        message: 'User not found.',
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Profile fetched.',
+    return res.status(200).json({      message: 'Profile fetched.',
       data: {
         id: user.uuid,
         full_name: user.full_name,
@@ -199,9 +173,7 @@ const getProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('getProfile error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Something went wrong.',
+    return res.status(500).json({      message: 'Something went wrong.',
     });
   }
 };

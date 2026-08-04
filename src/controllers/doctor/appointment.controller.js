@@ -15,9 +15,7 @@ const getAppointments = async (req, res) => {
     const { type = 'upcoming', page = 1, limit = 10 } = req.query;
 
     if (!['upcoming', 'ongoing', 'completed'].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Type must be: upcoming, ongoing, or completed.',
+      return res.status(400).json({        message: 'Type must be: upcoming, ongoing, or completed.',
       });
     }
 
@@ -39,9 +37,7 @@ const getAppointments = async (req, res) => {
       user_notes: a.user_notes,
     }));
 
-    return res.status(200).json({
-      success: true,
-      message: `${type} appointments fetched.`,
+    return res.status(200).json({      message: `${type} appointments fetched.`,
       data: appointments,
       pagination: {
         page: result.page,
@@ -52,7 +48,7 @@ const getAppointments = async (req, res) => {
     });
   } catch (error) {
     console.error('getAppointments error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -74,15 +70,13 @@ const getAppointmentDetail = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+      return res.status(404).json({ message: 'Appointment not found.' });
     }
 
     const b = rows[0];
     const metadata = b.metadata ? JSON.parse(b.metadata) : {};
 
-    return res.status(200).json({
-      success: true,
-      message: 'Appointment detail fetched.',
+    return res.status(200).json({      message: 'Appointment detail fetched.',
       data: {
         booking_id: b.booking_id,
         status: b.status,
@@ -130,7 +124,7 @@ const getAppointmentDetail = async (req, res) => {
     });
   } catch (error) {
     console.error('getAppointmentDetail error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -153,7 +147,7 @@ const updateAppointmentNotes = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+      return res.status(404).json({ message: 'Appointment not found.' });
     }
 
     const booking = rows[0];
@@ -170,9 +164,7 @@ const updateAppointmentNotes = async (req, res) => {
       [doctor_notes || booking.provider_notes, JSON.stringify(metadata), booking.id]
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Notes updated successfully.',
+    return res.status(200).json({      message: 'Notes updated successfully.',
       data: {
         booking_id,
         doctor_notes: doctor_notes || booking.provider_notes,
@@ -183,7 +175,7 @@ const updateAppointmentNotes = async (req, res) => {
     });
   } catch (error) {
     console.error('updateAppointmentNotes error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -202,13 +194,13 @@ const completeAppointment = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+      return res.status(404).json({ message: 'Appointment not found.' });
     }
 
     const booking = rows[0];
 
     if (booking.status === 'completed') {
-      return res.status(400).json({ success: false, message: 'Already completed.' });
+      return res.status(400).json({ message: 'Already completed.' });
     }
 
     await pool.query(
@@ -228,14 +220,12 @@ const completeAppointment = async (req, res) => {
       );
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Appointment marked as completed.',
+    return res.status(200).json({      message: 'Appointment marked as completed.',
       data: { booking_id, status: 'completed' },
     });
   } catch (error) {
     console.error('completeAppointment error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

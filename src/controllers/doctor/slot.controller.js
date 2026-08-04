@@ -29,14 +29,12 @@ const getSlots = async (req, res) => {
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Slots fetched.',
+    return res.status(200).json({      message: 'Slots fetched.',
       data: grouped,
     });
   } catch (error) {
     console.error('getSlots error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -51,11 +49,11 @@ const createSlot = async (req, res) => {
     const { day_of_week, start_time, end_time, slot_duration_minutes, consultation_type } = req.body;
 
     if (!day_of_week || !start_time || !end_time) {
-      return res.status(400).json({ success: false, message: 'day_of_week, start_time, end_time are required.' });
+      return res.status(400).json({ message: 'day_of_week, start_time, end_time are required.' });
     }
 
     if (!VALID_DAYS.includes(day_of_week.toLowerCase())) {
-      return res.status(400).json({ success: false, message: 'Invalid day. Use: monday, tuesday, etc.' });
+      return res.status(400).json({ message: 'Invalid day. Use: monday, tuesday, etc.' });
     }
 
     const slot = await slotModel.create(doctorId, {
@@ -66,14 +64,12 @@ const createSlot = async (req, res) => {
       consultation_type: consultation_type || 'both',
     });
 
-    return res.status(201).json({
-      success: true,
-      message: 'Slot created.',
+    return res.status(201).json({      message: 'Slot created.',
       data: { id: slot.id, day_of_week, start_time, end_time, slot_duration_minutes: slot_duration_minutes || 15 },
     });
   } catch (error) {
     console.error('createSlot error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -88,18 +84,16 @@ const updateSlot = async (req, res) => {
 
     const existing = await slotModel.findById(id, doctorId);
     if (!existing) {
-      return res.status(404).json({ success: false, message: 'Slot not found.' });
+      return res.status(404).json({ message: 'Slot not found.' });
     }
 
     await slotModel.update(id, doctorId, req.body);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Slot updated.',
+    return res.status(200).json({      message: 'Slot updated.',
     });
   } catch (error) {
     console.error('updateSlot error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -114,18 +108,16 @@ const deleteSlot = async (req, res) => {
 
     const existing = await slotModel.findById(id, doctorId);
     if (!existing) {
-      return res.status(404).json({ success: false, message: 'Slot not found.' });
+      return res.status(404).json({ message: 'Slot not found.' });
     }
 
     await slotModel.remove(id, doctorId);
 
-    return res.status(200).json({
-      success: true,
-      message: 'Slot deleted.',
+    return res.status(200).json({      message: 'Slot deleted.',
     });
   } catch (error) {
     console.error('deleteSlot error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 

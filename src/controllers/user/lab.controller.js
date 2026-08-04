@@ -33,9 +33,7 @@ const getLabList = async (req, res) => {
       timing: `${l.opening_time || '07:00'} - ${l.closing_time || '21:00'}`,
     }));
 
-    return res.status(200).json({
-      success: true,
-      message: 'Labs fetched.',
+    return res.status(200).json({      message: 'Labs fetched.',
       data: labs,
       pagination: {
         page: result.page,
@@ -46,7 +44,7 @@ const getLabList = async (req, res) => {
     });
   } catch (error) {
     console.error('getLabList error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -60,7 +58,7 @@ const getLabDetail = async (req, res) => {
 
     const lab = await labModel.findByUuid(id);
     if (!lab) {
-      return res.status(404).json({ success: false, message: 'Lab not found.' });
+      return res.status(404).json({ message: 'Lab not found.' });
     }
 
     const tests = await labModel.getLabTests(lab.id);
@@ -82,9 +80,7 @@ const getLabDetail = async (req, res) => {
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Lab profile fetched.',
+    return res.status(200).json({      message: 'Lab profile fetched.',
       data: {
         id: lab.uuid,
         name: lab.name,
@@ -125,7 +121,7 @@ const getLabDetail = async (req, res) => {
     });
   } catch (error) {
     console.error('getLabDetail error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -136,14 +132,12 @@ const getLabDetail = async (req, res) => {
 const getTestCategories = async (req, res) => {
   try {
     const categories = await labModel.getTestCategories();
-    return res.status(200).json({
-      success: true,
-      message: 'Test categories fetched.',
+    return res.status(200).json({      message: 'Test categories fetched.',
       data: categories,
     });
   } catch (error) {
     console.error('getTestCategories error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -156,18 +150,16 @@ const searchTests = async (req, res) => {
     const { search } = req.query;
 
     if (!search || search.trim().length < 2) {
-      return res.status(400).json({ success: false, message: 'Search query (min 2 chars) required.' });
+      return res.status(400).json({ message: 'Search query (min 2 chars) required.' });
     }
 
     const tests = await labModel.searchTests(search);
-    return res.status(200).json({
-      success: true,
-      message: 'Tests fetched.',
+    return res.status(200).json({      message: 'Tests fetched.',
       data: tests,
     });
   } catch (error) {
     console.error('searchTests error:', error.message);
-    return res.status(500).json({ success: false, message: 'Something went wrong.' });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
