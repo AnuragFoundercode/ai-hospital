@@ -39,7 +39,7 @@ const getBookings = async (req, res) => {
     );
 
     const bookings = rows.map((b) => {
-      const metadata = b.metadata ? JSON.parse(b.metadata) : {};
+      const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
       // Calculate age
       let age = null;
       if (b.user_dob) {
@@ -111,7 +111,7 @@ const acceptBooking = async (req, res) => {
     // Send notification to user
     const [userRows] = await pool.query('SELECT fcm_token, full_name FROM users WHERE id = ?', [booking.user_id]);
     const user = userRows[0];
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     if (user && user.fcm_token) {
       await notificationService.sendToDevice(
@@ -183,7 +183,7 @@ const rejectBooking = async (req, res) => {
     // Notify user
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
     const user = userRows[0];
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     if (user && user.fcm_token) {
       await notificationService.sendToDevice(
@@ -351,7 +351,7 @@ const uploadReport = async (req, res) => {
     }
 
     const booking = rows[0];
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     // Add reports to metadata (append to existing if any)
     if (!metadata.reports) metadata.reports = [];

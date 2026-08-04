@@ -323,7 +323,7 @@ const getBookingDetail = async (req, res) => {
       });
     }
 
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     return res.status(200).json({      message: 'Booking detail fetched.',
       data: {
@@ -500,7 +500,7 @@ const getAppointments = async (req, res) => {
     const now = new Date();
 
     const appointments = result.bookings.map((b) => {
-      const metadata = b.metadata ? JSON.parse(b.metadata) : {};
+      const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
       const bookingDateTime = new Date(`${new Date(b.booking_date).toISOString().split('T')[0]}T${b.slot_start_time}`);
 
       // Calculate remaining time for upcoming
@@ -607,7 +607,7 @@ const getAppointmentDetail = async (req, res) => {
       return res.status(403).json({ message: 'Not your appointment.' });
     }
 
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     // Get doctor info
     const { pool } = require('../../config/database');

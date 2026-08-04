@@ -74,7 +74,7 @@ const getAppointmentDetail = async (req, res) => {
     }
 
     const b = rows[0];
-    const metadata = b.metadata ? JSON.parse(b.metadata) : {};
+    const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
 
     return res.status(200).json({      message: 'Appointment detail fetched.',
       data: {
@@ -151,7 +151,7 @@ const updateAppointmentNotes = async (req, res) => {
     }
 
     const booking = rows[0];
-    const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+    const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
     // Update metadata with clinical data
     if (diagnosis !== undefined) metadata.diagnosis = diagnosis;

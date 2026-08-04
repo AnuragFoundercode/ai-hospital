@@ -3,6 +3,7 @@ const router = express.Router();
 const labController = require('../../controllers/lab/lab.controller');
 const walletController = require('../../controllers/lab/wallet.controller');
 const bookingController = require('../../controllers/lab/booking.controller');
+const dashboardController = require('../../controllers/lab/dashboard.controller');
 const labAuth = require('../../middlewares/lab/lab.auth');
 
 // ─────────────────────────────────────────────
@@ -19,6 +20,9 @@ router.post('/reset-password', labController.resetPassword);
 router.get('/profile', labAuth, labController.getProfile);
 router.put('/profile', labAuth, labController.updateProfile);
 router.put('/change-password', labAuth, labController.changePassword);
+
+// Dashboard
+router.get('/dashboard', labAuth, dashboardController.getDashboard);
 
 // Bookings
 router.get('/bookings', labAuth, bookingController.getBookings);
