@@ -386,8 +386,137 @@ const uploadReport = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/lab/booking/:booking_id
+ * Full booking detail for lab
+ */
+const getBookingDetail = async (req, res) => {
+  try {
+    const labId = req.lab.id;
+    const { booking_id } = req.params;
+
+    const [rows] = await pool.query(
+      `SELECT b.*, u.full_name as user_name, u.mobile as user_mobile, u.email as user_email, u.gender as user_gender, u.date_of_birth as user_dob, u.blood_group as user_blood_group, u.profile_photo as user_photo
+       FROM bookings b
+       JOIN users u ON b.user_id = u.id
+       WHERE b.booking_id = ? AND b.provider_id = ? AND b.service_type = 'pathology_test'`,
+      [booking_id, labId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Booking not found.' });
+    }
+
+    const b = rows[0];
+    const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
+
+    // Calculate age
+    let age = null;
+    if (b.user_dob) {
+      const today = new Date();
+      const dob = new Date(b.user_dob);
+      age = today.getFullYear() - dob.getFullYear();
+    }
+
+    // Get status timeline
+    const [timeline] = await pool.query(
+      'SELECT from_status, to_status, changed_by_type, remarks, created_at FROM booking_status_history WHERE booking_id = ? ORDER BY created_at ASC',
+      [b.id]
+    );
+
+    return res.status(200).json({
+      message: 'Booking detail fetched.',
+      data: {
+        booking_id: b.booking_id,
+        status: b.status,
+        patient: {
+          name: b.user_name,
+          mobile: b.user_mobile,
+          email: b.user_email,
+          gender: b.user_gender,
+          age,
+          blood_group: b.user_blood_group,
+          profile_photo: b.user_photo,
+        },
+        booking_info: {
+          date: b.booking_date,
+          collection_type: metadata.collection_type || 'home',
+          user_notes: b.user_notes,
+          created_at: b.created_at,
+          confirmed_at: b.confirmed_at,
+          started_at: b.started_at,
+          completed_at: b.completed_at,
+          cancelled_at: b.cancelled_at,
+          cancellation_reason: b.cancellation_reason,
+        },
+        prescription: {
+          attachments: metadata.attachments || [],
+        },
+        tests: metadata.tests || [],
+        reports: metadata.reports || [],
+        internal_notes: b.provider_notes,
+        payment: {
+          status: b.payment_status,
+          method: b.payment_method,
+          base_amount: b.base_amount,
+          discount: b.discount_amount,
+          tax: b.tax_amount,
+          total: b.final_amount,
+          transaction_id: b.transaction_id,
+          paid_at: b.paid_at,
+        },
+        rating: {
+          user_rating: b.user_rating,
+          user_review: b.user_review,
+        },
+        timeline: timeline.map((t) => ({
+          from: t.from_status,
+          to: t.to_status,
+          by: t.changed_by_type,
+          remarks: t.remarks,
+          at: t.created_at,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('lab getBookingDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * PUT /api/v1/lab/booking/:booking_id/notes
+ * Add internal notes
+ * Body: { notes }
+ */
+const updateNotes = async (req, res) => {
+  try {
+    const labId = req.lab.id;
+    const { booking_id } = req.params;
+    const { notes } = req.body;
+
+    const [rows] = await pool.query(
+      "SELECT id FROM bookings WHERE booking_id = ? AND provider_id = ? AND service_type = 'pathology_test'",
+      [booking_id, labId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Booking not found.' });
+    }
+
+    await pool.query('UPDATE bookings SET provider_notes = ? WHERE id = ?', [notes, rows[0].id]);
+
+    return res.status(200).json({ message: 'Notes updated.', data: { booking_id, notes } });
+  } catch (error) {
+    console.error('lab updateNotes error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getBookings,
+  getBookingDetail,
+  updateNotes,
   acceptBooking,
   rejectBooking,
   startProcessing,

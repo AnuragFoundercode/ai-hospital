@@ -5,6 +5,7 @@ const paytmService = require('../../services/paytm.service');
 const paytmConfig = require('../../config/paytm');
 const bookingNotification = require('../../services/booking.notification');
 const { pool } = require('../../config/database');
+const { sendToLab, sendToDoctor } = require('../../events/sse');
 
 // ─────────────────────────────────────────────
 // BOOKING CONTROLLER - For patient app
@@ -240,6 +241,28 @@ const confirmPayment = async (req, res) => {
     // Send push notifications to user & doctor
     const updatedBooking = await bookingModel.findByBookingId(booking_id);
     bookingNotification.sendBookingConfirmedNotification(updatedBooking);
+
+    // Send SSE to lab/doctor for real-time popup
+    const metadata = typeof updatedBooking.metadata === 'string' ? JSON.parse(updatedBooking.metadata) : (updatedBooking.metadata || {});
+    if (updatedBooking.service_type === 'pathology_test') {
+      console.log(`📡 Sending SSE to lab_${updatedBooking.provider_id}`);
+      const sent = sendToLab(updatedBooking.provider_id, 'new_booking', {
+        booking_id: updatedBooking.booking_id,
+        date: updatedBooking.booking_date,
+        amount: updatedBooking.final_amount,
+        collection_type: metadata.collection_type,
+        tests: metadata.tests || [],
+        user_notes: updatedBooking.user_notes,
+      });
+      console.log(`📡 SSE sent: ${sent}`);
+    } else if (updatedBooking.service_type === 'doctor_consultation') {
+      sendToDoctor(updatedBooking.provider_id, 'new_booking', {
+        booking_id: updatedBooking.booking_id,
+        date: updatedBooking.booking_date,
+        slot_time: updatedBooking.slot_start_time,
+        amount: updatedBooking.final_amount,
+      });
+    }
 
     return res.status(200).json({      message: 'Payment successful. Booking confirmed!',
       data: {

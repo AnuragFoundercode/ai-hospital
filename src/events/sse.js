@@ -1,45 +1,42 @@
 /**
  * Server-Sent Events (SSE) Manager
- * Real-time updates for ambulance tracking, order status, notifications
+ * Real-time updates for all panels
+ * Keys: user_1, doctor_1, lab_1 (type + id)
  */
 
-const clients = new Map(); // userId -> response object
+const clients = new Map();
 
 /**
- * Register SSE connection for a user
+ * Register SSE connection
+ * @param {string} clientKey - e.g., "user_1", "lab_4", "doctor_2"
  */
-const registerClient = (req, res, userId) => {
-  // Set SSE headers
+const registerClient = (req, res, clientKey) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  // Send initial connection event
   res.write(`data: ${JSON.stringify({ type: 'connected', message: 'SSE connected' })}\n\n`);
 
-  // Store client
-  clients.set(userId, res);
-  console.log(`📡 SSE client connected: ${userId} | Total: ${clients.size}`);
+  clients.set(clientKey, res);
+  console.log(`📡 SSE connected: ${clientKey} | Total: ${clients.size}`);
 
-  // Heartbeat to keep connection alive
   const heartbeat = setInterval(() => {
     res.write(': heartbeat\n\n');
   }, 30000);
 
-  // Cleanup on disconnect
   req.on('close', () => {
     clearInterval(heartbeat);
-    clients.delete(userId);
-    console.log(`📡 SSE client disconnected: ${userId} | Total: ${clients.size}`);
+    clients.delete(clientKey);
+    console.log(`📡 SSE disconnected: ${clientKey} | Total: ${clients.size}`);
   });
 };
 
 /**
- * Send event to specific user
+ * Send event to specific client
  */
-const sendToUser = (userId, eventType, data) => {
-  const client = clients.get(userId);
+const sendToClient = (clientKey, eventType, data) => {
+  const client = clients.get(clientKey);
   if (client) {
     client.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
     return true;
@@ -47,8 +44,13 @@ const sendToUser = (userId, eventType, data) => {
   return false;
 };
 
+// Shorthand helpers
+const sendToUser = (userId, eventType, data) => sendToClient(`user_${userId}`, eventType, data);
+const sendToDoctor = (doctorId, eventType, data) => sendToClient(`doctor_${doctorId}`, eventType, data);
+const sendToLab = (labId, eventType, data) => sendToClient(`lab_${labId}`, eventType, data);
+
 /**
- * Broadcast event to all connected clients
+ * Broadcast to all
  */
 const broadcast = (eventType, data) => {
   clients.forEach((client) => {
@@ -56,11 +58,4 @@ const broadcast = (eventType, data) => {
   });
 };
 
-/**
- * Send event to multiple users
- */
-const sendToUsers = (userIds, eventType, data) => {
-  userIds.forEach((userId) => sendToUser(userId, eventType, data));
-};
-
-module.exports = { registerClient, sendToUser, broadcast, sendToUsers };
+module.exports = { registerClient, sendToClient, sendToUser, sendToDoctor, sendToLab, broadcast };

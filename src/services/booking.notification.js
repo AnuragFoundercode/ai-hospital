@@ -11,7 +11,7 @@ const { pool } = require('../config/database');
  * Notifies both USER and DOCTOR
  */
 const sendBookingConfirmedNotification = async (booking) => {
-  const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+  const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
   const bookingDate = new Date(booking.booking_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   const slotTime = booking.slot_start_time;
 
@@ -74,7 +74,7 @@ const sendBookingConfirmedNotification = async (booking) => {
  * Send notification when booking is cancelled
  */
 const sendBookingCancelledNotification = async (booking, cancelledBy) => {
-  const metadata = booking.metadata ? JSON.parse(booking.metadata) : {};
+  const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
   try {
     // Notify the other party
