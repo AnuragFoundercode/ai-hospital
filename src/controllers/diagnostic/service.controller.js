@@ -14,7 +14,7 @@ const getMyServices = async (req, res) => {
     const centerId = req.diagnostic.id;
 
     const [rows] = await pool.query(
-      `SELECT dsp.id, dsp.service_id, dsp.price, dsp.discount_percent, dsp.duration_minutes, dsp.is_available,
+      `SELECT dsp.id, dsp.service_id, dsp.price, dsp.discount_percent, dsp.duration_minutes, dsp.is_available, dsp.booking_type, dsp.slot_duration_minutes_config, dsp.working_days, dsp.working_hours_from, dsp.working_hours_to, dsp.break_from, dsp.break_to,
               ds.name, dc.name as category_name
        FROM diagnostic_service_pricing dsp
        JOIN diagnostic_services ds ON dsp.service_id = ds.id
@@ -35,6 +35,15 @@ const getMyServices = async (req, res) => {
         discount_percent: r.discount_percent,
         duration_minutes: r.duration_minutes,
         is_available: r.is_available,
+        booking_type: r.booking_type,
+        slot_config: r.booking_type === 'appointment' ? {
+          slot_duration: r.slot_duration_minutes_config,
+          working_days: r.working_days ? r.working_days.split(',') : [],
+          working_hours_from: r.working_hours_from,
+          working_hours_to: r.working_hours_to,
+          break_from: r.break_from,
+          break_to: r.break_to,
+        } : null,
       })),
     });
   } catch (error) {
@@ -57,13 +66,13 @@ const getCategories = async (req, res) => {
 
 /**
  * POST /api/v1/diagnostic/services
- * Create new service + set price
- * Body: { name, category_id, price, discount_percent, duration_minutes, description, preparation_instructions }
+ * Create new service + set price + booking config
+ * Body: { name, category_id, price, discount_percent, duration_minutes, description, preparation_instructions, booking_type, slot_duration_minutes_config, working_days, working_hours_from, working_hours_to, break_from, break_to }
  */
 const addService = async (req, res) => {
   try {
     const centerId = req.diagnostic.id;
-    const { name, category_id, price, discount_percent, duration_minutes, description, preparation_instructions } = req.body;
+    const { name, category_id, price, discount_percent, duration_minutes, description, preparation_instructions, booking_type, slot_duration_minutes_config, working_days, working_hours_from, working_hours_to, break_from, break_to } = req.body;
 
     if (!name || !price) {
       return res.status(400).json({ message: 'name and price required.' });
@@ -77,15 +86,17 @@ const addService = async (req, res) => {
 
     const serviceId = serviceResult.insertId;
 
-    // Add pricing
+    // Add pricing + booking config
+    const workingDaysStr = Array.isArray(working_days) ? working_days.join(',') : (working_days || 'mon,tue,wed,thu,fri,sat');
+
     const [pricingResult] = await pool.query(
-      'INSERT INTO diagnostic_service_pricing (diagnostic_center_id, service_id, price, discount_percent, duration_minutes) VALUES (?, ?, ?, ?, ?)',
-      [centerId, serviceId, price, discount_percent || 0, duration_minutes || 30]
+      `INSERT INTO diagnostic_service_pricing (diagnostic_center_id, service_id, price, discount_percent, duration_minutes, booking_type, slot_duration_minutes_config, working_days, working_hours_from, working_hours_to, break_from, break_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [centerId, serviceId, price, discount_percent || 0, duration_minutes || 30, booking_type || 'appointment', slot_duration_minutes_config || 30, workingDaysStr, working_hours_from || '08:00', working_hours_to || '20:00', break_from || null, break_to || null]
     );
 
     return res.status(201).json({
       message: 'Service added.',
-      data: { id: pricingResult.insertId, service_id: serviceId, name, price, category_id },
+      data: { id: pricingResult.insertId, service_id: serviceId, name, price, booking_type: booking_type || 'appointment' },
     });
   } catch (error) {
     console.error('diagnostic addService error:', error.message);
@@ -95,14 +106,13 @@ const addService = async (req, res) => {
 
 /**
  * PUT /api/v1/diagnostic/services/:id
- * Update pricing (id = diagnostic_service_pricing.id)
- * Body: { price, discount_percent, duration_minutes, is_available }
+ * Update pricing + booking config
  */
 const updateService = async (req, res) => {
   try {
     const centerId = req.diagnostic.id;
     const { id } = req.params;
-    const { price, discount_percent, duration_minutes, is_available } = req.body;
+    const { price, discount_percent, duration_minutes, is_available, booking_type, slot_duration_minutes_config, working_days, working_hours_from, working_hours_to, break_from, break_to } = req.body;
 
     const [existing] = await pool.query(
       'SELECT id FROM diagnostic_service_pricing WHERE id = ? AND diagnostic_center_id = ?',
@@ -120,6 +130,13 @@ const updateService = async (req, res) => {
     if (discount_percent !== undefined) { fields.push('discount_percent = ?'); values.push(discount_percent); }
     if (duration_minutes !== undefined) { fields.push('duration_minutes = ?'); values.push(duration_minutes); }
     if (is_available !== undefined) { fields.push('is_available = ?'); values.push(is_available ? 1 : 0); }
+    if (booking_type) { fields.push('booking_type = ?'); values.push(booking_type); }
+    if (slot_duration_minutes_config !== undefined) { fields.push('slot_duration_minutes_config = ?'); values.push(slot_duration_minutes_config); }
+    if (working_days) { fields.push('working_days = ?'); values.push(Array.isArray(working_days) ? working_days.join(',') : working_days); }
+    if (working_hours_from) { fields.push('working_hours_from = ?'); values.push(working_hours_from); }
+    if (working_hours_to) { fields.push('working_hours_to = ?'); values.push(working_hours_to); }
+    if (break_from !== undefined) { fields.push('break_from = ?'); values.push(break_from || null); }
+    if (break_to !== undefined) { fields.push('break_to = ?'); values.push(break_to || null); }
 
     if (!fields.length) return res.status(400).json({ message: 'Nothing to update.' });
 

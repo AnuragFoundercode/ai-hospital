@@ -262,6 +262,16 @@ const confirmPayment = async (req, res) => {
         slot_time: updatedBooking.slot_start_time,
         amount: updatedBooking.final_amount,
       });
+    } else if (updatedBooking.service_type === 'diagnostic_scan') {
+      const { sendToClient } = require('../../events/sse');
+      sendToClient(`diagnostic_${updatedBooking.provider_id}`, 'new_booking', {
+        booking_id: updatedBooking.booking_id,
+        date: updatedBooking.booking_date,
+        slot_time: updatedBooking.slot_start_time,
+        amount: updatedBooking.final_amount,
+        service_name: metadata.service_name,
+        patient_name: metadata.patient?.name,
+      });
     }
 
     return res.status(200).json({      message: 'Payment successful. Booking confirmed!',
@@ -843,9 +853,166 @@ const createLabBooking = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/v1/user/booking/diagnostic
+ * Book a diagnostic service
+ * Body: { service_pricing_id, booking_date, slot_id (if appointment), payment_method, patient_name, patient_mobile, patient_age, patient_gender, patient_email, prescription, remark }
+ */
+const createDiagnosticBooking = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { service_pricing_id, booking_date, slot_id, payment_method, patient_name, patient_mobile, patient_age, patient_gender, patient_email, prescription, remark } = req.body;
+
+    // Validate required
+    if (!service_pricing_id || !booking_date || !payment_method || !patient_name || !patient_mobile || !patient_age || !patient_gender) {
+      return res.status(400).json({ message: 'Required: service_pricing_id, booking_date, payment_method, patient_name, patient_mobile, patient_age, patient_gender' });
+    }
+
+    if (!['online', 'offline'].includes(payment_method)) {
+      return res.status(400).json({ message: 'payment_method must be "online" or "offline".' });
+    }
+
+    // Get service pricing details
+    const [serviceRows] = await pool.query(
+      `SELECT dsp.*, ds.name as service_name, dc.name as center_name, dc.uuid as center_uuid, dc.id as center_id
+       FROM diagnostic_service_pricing dsp
+       JOIN diagnostic_services ds ON dsp.service_id = ds.id
+       JOIN diagnostic_centers dc ON dsp.diagnostic_center_id = dc.id
+       WHERE dsp.id = ? AND dsp.is_available = 1`,
+      [service_pricing_id]
+    );
+
+    if (!serviceRows.length) {
+      return res.status(404).json({ message: 'Service not found or unavailable.' });
+    }
+
+    const service = serviceRows[0];
+
+    // If appointment type, validate slot_id
+    let slotTime = null;
+    let slotEndTime = null;
+    if (service.booking_type === 'appointment') {
+      if (!slot_id) {
+        return res.status(400).json({ message: 'slot_id required for appointment type services.' });
+      }
+      const parts = slot_id.split('_');
+      if (parts.length !== 2) {
+        return res.status(400).json({ message: 'Invalid slot_id format.' });
+      }
+      slotTime = `${parts[1].slice(0, 2)}:${parts[1].slice(2)}`;
+      const duration = service.slot_duration_minutes_config || 30;
+      const totalMins = parseInt(parts[1].slice(0, 2)) * 60 + parseInt(parts[1].slice(2)) + duration;
+      slotEndTime = `${Math.floor(totalMins / 60).toString().padStart(2, '0')}:${(totalMins % 60).toString().padStart(2, '0')}`;
+    }
+
+    // Calculate pricing
+    const baseAmount = parseFloat(service.price);
+    const discount = baseAmount * (parseFloat(service.discount_percent) / 100);
+    const finalAmount = baseAmount - discount;
+
+    // Create booking
+    const bookingModel = require('../../models/user/booking.model');
+    const booking = await bookingModel.create({
+      user_id: userId,
+      service_type: 'diagnostic_scan',
+      provider_id: service.center_id,
+      status: payment_method === 'offline' ? 'confirmed' : 'pending',
+      booking_date,
+      slot_start_time: slotTime,
+      slot_end_time: slotEndTime,
+      base_amount: baseAmount,
+      discount_amount: discount,
+      tax_amount: 0,
+      final_amount: finalAmount,
+      payment_status: payment_method === 'offline' ? 'unpaid' : 'unpaid',
+      payment_method: payment_method === 'offline' ? 'cod' : null,
+      metadata: {
+        service_pricing_id,
+        service_name: service.service_name,
+        center_name: service.center_name,
+        booking_type: service.booking_type,
+        patient: { name: patient_name, mobile: patient_mobile, age: patient_age, gender: patient_gender, email: patient_email || null },
+        prescription: prescription || null,
+      },
+      user_notes: remark || null,
+    });
+
+    await bookingModel.addStatusHistory(booking.id, null, payment_method === 'offline' ? 'confirmed' : 'pending', 'user', userId, 'Diagnostic booking created');
+
+    // OFFLINE → Direct confirm, send notification + SSE
+    if (payment_method === 'offline') {
+      // Notify diagnostic center
+      const notificationService = require('../../services/notification.service');
+      const [centerRows] = await pool.query('SELECT fcm_token FROM diagnostic_centers WHERE id = ?', [service.center_id]);
+      const center = centerRows[0];
+      if (center && center.fcm_token) {
+        await notificationService.sendToDevice(center.fcm_token, 'New Booking 📋', `New ${service.service_name} booking for ${booking_date}.`, { type: 'new_booking', booking_id: booking.booking_id });
+      }
+      await pool.query("INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('diagnostic_center', ?, 'New Booking 📋', ?, 'booking', 'booking', ?, ?)",
+        [service.center_id, `New ${service.service_name} booking.`, booking.id, center?.fcm_token ? 'push' : 'sms']);
+
+      // SSE
+      const { sendToClient } = require('../../events/sse');
+      sendToClient(`diagnostic_${service.center_id}`, 'new_booking', {
+        booking_id: booking.booking_id, date: booking_date, service_name: service.service_name,
+        amount: finalAmount, patient_name, slot_time: slotTime, booking_type: service.booking_type,
+      });
+
+      return res.status(201).json({
+        message: 'Booking confirmed! Pay at center.',
+        data: {
+          booking_id: booking.booking_id,
+          service_name: service.service_name,
+          center_name: service.center_name,
+          date: booking_date,
+          slot_time: slotTime,
+          amount: { base: baseAmount, discount, total: finalAmount },
+          payment_method: 'offline',
+          status: 'confirmed',
+          payment_status: 'unpaid',
+          payment: null,
+        },
+      });
+    }
+
+    // ONLINE → Initiate Paytm
+    let paytmData = null;
+    try {
+      const paytmResponse = await paytmService.initiateTransaction(booking.booking_id, finalAmount, userId);
+      if (paytmResponse.body && paytmResponse.body.txnToken) {
+        paytmData = { txn_token: paytmResponse.body.txnToken, order_id: booking.booking_id, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl };
+      } else {
+        paytmData = { txn_token: null, order_id: booking.booking_id, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl, error: paytmResponse.body?.resultInfo?.resultMsg || 'Failed' };
+      }
+    } catch (paytmError) {
+      paytmData = { txn_token: null, order_id: booking.booking_id, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl, error: paytmError.message };
+    }
+
+    return res.status(201).json({
+      message: 'Booking created. Complete payment.',
+      data: {
+        booking_id: booking.booking_id,
+        service_name: service.service_name,
+        center_name: service.center_name,
+        date: booking_date,
+        slot_time: slotTime,
+        amount: { base: baseAmount, discount, total: finalAmount },
+        payment_method: 'online',
+        status: 'pending',
+        payment_status: 'unpaid',
+        payment: paytmData,
+      },
+    });
+  } catch (error) {
+    console.error('createDiagnosticBooking error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   createDoctorBooking,
   createLabBooking,
+  createDiagnosticBooking,
   confirmPayment,
   paytmCallback,
   verifyPayment,
