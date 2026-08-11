@@ -1,6 +1,7 @@
 const { pool } = require('../../config/database');
 const notificationService = require('../../services/notification.service');
 const { sendToClient } = require('../../events/sse');
+const walletController = require('./wallet.controller');
 
 // ─────────────────────────────────────────────
 // DIAGNOSTIC BOOKING CONTROLLER
@@ -239,6 +240,12 @@ const updateStatus = async (req, res) => {
 
     await pool.query(`UPDATE bookings SET ${updateFields.join(', ')} WHERE id = ?`, [...updateValues, booking.id]);
     await pool.query("INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_type, changed_by_id, remarks) VALUES (?, ?, ?, 'provider', ?, ?)", [booking.id, booking.status, status, centerId, `Status updated to ${status}`]);
+
+    // Credit wallet on complete
+    if (status === 'completed') {
+      const paymentType = booking.payment_method === 'cod' ? 'offline' : 'online';
+      await walletController.creditAfterComplete(centerId, booking.id, parseFloat(booking.final_amount), paymentType);
+    }
 
     // Notify user on key status changes
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);

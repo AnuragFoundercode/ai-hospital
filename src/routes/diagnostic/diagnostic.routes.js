@@ -4,6 +4,8 @@ const diagnosticController = require('../../controllers/diagnostic/diagnostic.co
 const serviceController = require('../../controllers/diagnostic/service.controller');
 const slotController = require('../../controllers/diagnostic/slot.controller');
 const bookingController = require('../../controllers/diagnostic/booking.controller');
+const walletController = require('../../controllers/diagnostic/wallet.controller');
+const dashboardController = require('../../controllers/diagnostic/dashboard.controller');
 const { registerClient } = require('../../events/sse');
 const diagnosticAuth = require('../../middlewares/diagnostic/diagnostic.auth');
 
@@ -25,6 +27,9 @@ router.put('/change-password', diagnosticAuth, diagnosticController.changePasswo
 // Bank details
 router.get('/bank-details', diagnosticAuth, diagnosticController.getBankDetails);
 router.put('/bank-details', diagnosticAuth, diagnosticController.updateBankDetails);
+
+// Dashboard
+router.get('/dashboard', diagnosticAuth, dashboardController.getDashboard);
 
 // Service Management
 router.get('/services', diagnosticAuth, serviceController.getMyServices);
@@ -51,5 +56,12 @@ router.put('/booking/:booking_id/upload-report', diagnosticAuth, bookingControll
 router.get('/events/stream', diagnosticAuth, (req, res) => {
   registerClient(req, res, `diagnostic_${req.diagnostic.id}`);
 });
+
+// Wallet
+router.get('/wallet', diagnosticAuth, walletController.getWallet);
+router.get('/wallet/transactions', diagnosticAuth, walletController.getTransactions);
+router.get('/wallet/admin-dues', diagnosticAuth, walletController.getAdminDues);
+router.post('/wallet/withdraw', diagnosticAuth, walletController.requestWithdrawal);
+router.get('/wallet/withdrawals', diagnosticAuth, walletController.getWithdrawals);
 
 module.exports = router;

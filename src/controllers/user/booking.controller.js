@@ -5,7 +5,7 @@ const paytmService = require('../../services/paytm.service');
 const paytmConfig = require('../../config/paytm');
 const bookingNotification = require('../../services/booking.notification');
 const { pool } = require('../../config/database');
-const { sendToLab, sendToDoctor } = require('../../events/sse');
+const { sendToLab, sendToDoctor, sendToClient } = require('../../events/sse');
 
 // ─────────────────────────────────────────────
 // BOOKING CONTROLLER - For patient app
@@ -271,6 +271,8 @@ const confirmPayment = async (req, res) => {
         amount: updatedBooking.final_amount,
         service_name: metadata.service_name,
         patient_name: metadata.patient?.name,
+        booking_type: metadata.booking_type,
+        payment_method: updatedBooking.payment_method || 'online',
       });
     }
 
@@ -956,6 +958,7 @@ const createDiagnosticBooking = async (req, res) => {
       sendToClient(`diagnostic_${service.center_id}`, 'new_booking', {
         booking_id: booking.booking_id, date: booking_date, service_name: service.service_name,
         amount: finalAmount, patient_name, slot_time: slotTime, booking_type: service.booking_type,
+        payment_method: 'offline',
       });
 
       return res.status(201).json({
