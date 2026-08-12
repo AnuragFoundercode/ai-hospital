@@ -7,6 +7,8 @@ const userSseRoutes = require('./user/sse.routes');
 const doctorRoutes = require('./doctor/doctor.routes');
 const labRoutes = require('./lab/lab.routes');
 const diagnosticRoutes = require('./diagnostic/diagnostic.routes');
+const adminRoutes = require('./admin/admin.routes');
+const globalRoutes = require('./global.routes');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -28,6 +30,12 @@ router.use('/lab', labRoutes);
 
 // Diagnostic center panel
 router.use('/diagnostic', diagnosticRoutes);
+
+// Admin panel
+router.use('/admin', adminRoutes);
+
+// Global (public - no token)
+router.use('/global', globalRoutes);
 
 // Future panels will be added here:
 // router.use('/pharmacy', pharmacyRoutes);

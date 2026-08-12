@@ -11,7 +11,7 @@ const diagnosticModel = require('../../models/diagnostic/diagnostic.model');
  */
 const register = async (req, res) => {
   try {
-    const { name, owner_name, email, password, mobile, registration_number, gst_number, pan_number, nabh_accreditation_number, address, city, state, pincode, opening_time, closing_time } = req.body;
+    const { name, owner_name, email, password, mobile, registration_number, gst_number, pan_number, nabh_accreditation_number, address, address2, landmark, city, state, pincode, opening_time, closing_time, nabh_certificate_url, registration_certificate_url, gst_certificate_url, pan_card_url, profile_photo, zone_id, latitude, longitude } = req.body;
 
     if (!name || !owner_name || !email || !password || !mobile || !registration_number || !address || !city || !state || !pincode) {
       return res.status(400).json({ message: 'Required: name, owner_name, email, password, mobile, registration_number, address, city, state, pincode' });
@@ -30,7 +30,9 @@ const register = async (req, res) => {
     const center = await diagnosticModel.register({
       name, owner_name, email, password, mobile, registration_number,
       gst_number, pan_number, nabh_accreditation_number,
-      address, city, state, pincode, opening_time, closing_time
+      address, address2, landmark, city, state, pincode, opening_time, closing_time,
+      nabh_certificate_url, registration_certificate_url, gst_certificate_url, pan_card_url, profile_photo,
+      zone_id, latitude, longitude
     });
 
     return res.status(201).json({
@@ -125,9 +127,11 @@ const getProfile = async (req, res) => {
         location: {
           address: center.address_line1,
           address_line2: center.address_line2,
+          landmark: center.landmark,
           city: center.city,
           state: center.state,
           pincode: center.pincode,
+          zone_id: center.zone_id,
           latitude: center.latitude,
           longitude: center.longitude,
         },
@@ -293,6 +297,41 @@ const updateBankDetails = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/diagnostic/zones?state=Uttar Pradesh
+ * Active zones list, optional filter by state
+ */
+const getZones = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const { state } = req.query;
+
+    let where = 'is_active = 1';
+    let params = [];
+
+    if (state) { where += ' AND state = ?'; params.push(state); }
+
+    const [rows] = await pool.query(`SELECT id, name, state FROM zones WHERE ${where} ORDER BY state, name`, params);
+    return res.status(200).json({ message: 'Zones fetched.', data: rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/diagnostic/states
+ * Active states list for dropdown
+ */
+const getStates = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const [rows] = await pool.query('SELECT id, name, code FROM states WHERE is_active = 1 ORDER BY name');
+    return res.status(200).json({ message: 'States fetched.', data: rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -303,4 +342,6 @@ module.exports = {
   resetPassword,
   getBankDetails,
   updateBankDetails,
+  getZones,
+  getStates,
 };

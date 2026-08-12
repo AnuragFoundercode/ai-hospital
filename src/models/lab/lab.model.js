@@ -26,12 +26,17 @@ const register = async (data) => {
   const hashedPassword = await bcrypt.hash(data.password, 10);
 
   const [result] = await pool.query(
-    `INSERT INTO pathology_labs (uuid, name, owner_name, mobile, email, password_hash, lab_license_number, gst_number, pan_number, nabl_accreditation_number, address_line1, city, state, pincode, home_collection_available, opening_time, closing_time, verification_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    `INSERT INTO pathology_labs (uuid, name, owner_name, mobile, email, password_hash, lab_license_number, gst_number, pan_number, nabl_accreditation_number, nabl_certificate_url, lab_license_url, gst_certificate_url, pan_card_url, profile_photo, address_line1, address_line2, landmark, city, state, pincode, zone_id, latitude, longitude, home_collection_available, opening_time, closing_time, verification_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
     [
       uuid, data.name, data.owner_name, data.mobile, data.email, hashedPassword,
       data.lab_license_number, data.gst_number || null, data.pan_number || null,
-      data.nabl_accreditation_number || null, data.address, data.city, data.state, data.pincode,
+      data.nabl_accreditation_number || null,
+      data.nabl_certificate_url || null, data.lab_license_url || null,
+      data.gst_certificate_url || null, data.pan_card_url || null, data.profile_photo || null,
+      data.address, data.address2 || null, data.landmark || null,
+      data.city, data.state, data.pincode, data.zone_id || null,
+      data.latitude || null, data.longitude || null,
       data.home_collection_available ? 1 : 0, data.opening_time || null, data.closing_time || null
     ]
   );
@@ -44,7 +49,7 @@ const verifyPassword = async (plainPassword, hashedPassword) => {
 };
 
 const updateProfile = async (id, data) => {
-  const allowedFields = ['name', 'owner_name', 'mobile', 'profile_photo', 'lab_license_number', 'gst_number', 'pan_number', 'nabl_accreditation_number', 'nabl_certificate_url', 'lab_license_url', 'gst_certificate_url', 'pan_card_url', 'address_line1', 'address_line2', 'city', 'state', 'pincode', 'latitude', 'longitude', 'home_collection_available', 'home_collection_radius_km', 'opening_time', 'closing_time'];
+  const allowedFields = ['name', 'owner_name', 'mobile', 'profile_photo', 'lab_license_number', 'gst_number', 'pan_number', 'nabl_accreditation_number', 'nabl_certificate_url', 'lab_license_url', 'gst_certificate_url', 'pan_card_url', 'address_line1', 'address_line2', 'landmark', 'city', 'state', 'pincode', 'zone_id', 'latitude', 'longitude', 'home_collection_available', 'home_collection_radius_km', 'opening_time', 'closing_time'];
   const fields = [];
   const values = [];
 

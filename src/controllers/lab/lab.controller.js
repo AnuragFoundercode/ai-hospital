@@ -12,7 +12,7 @@ const labModel = require('../../models/lab/lab.model');
  */
 const register = async (req, res) => {
   try {
-    const { name, owner_name, email, password, mobile, lab_license_number, gst_number, pan_number, nabl_accreditation_number, address, city, state, pincode, home_collection_available, opening_time, closing_time } = req.body;
+    const { name, owner_name, email, password, mobile, lab_license_number, gst_number, pan_number, nabl_accreditation_number, address, address2, landmark, city, state, pincode, zone_id, latitude, longitude, home_collection_available, opening_time, closing_time, nabl_certificate_url, lab_license_url, gst_certificate_url, pan_card_url, profile_photo } = req.body;
 
     // Validate required
     if (!name || !owner_name || !email || !password || !mobile || !lab_license_number || !address || !city || !state || !pincode) {
@@ -34,7 +34,9 @@ const register = async (req, res) => {
     const lab = await labModel.register({
       name, owner_name, email, password, mobile, lab_license_number,
       gst_number, pan_number, nabl_accreditation_number,
-      address, city, state, pincode, home_collection_available, opening_time, closing_time
+      address, address2, landmark, city, state, pincode, zone_id, latitude, longitude,
+      home_collection_available, opening_time, closing_time,
+      nabl_certificate_url, lab_license_url, gst_certificate_url, pan_card_url, profile_photo
     });
 
     return res.status(201).json({      message: 'Registration successful! Your account is pending admin approval.',

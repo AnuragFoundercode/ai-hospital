@@ -23,6 +23,8 @@ router.post('/reset-password', diagnosticController.resetPassword);
 router.get('/profile', diagnosticAuth, diagnosticController.getProfile);
 router.put('/profile', diagnosticAuth, diagnosticController.updateProfile);
 router.put('/change-password', diagnosticAuth, diagnosticController.changePassword);
+router.get('/zones', diagnosticAuth, diagnosticController.getZones);
+router.get('/states', diagnosticAuth, diagnosticController.getStates);
 
 // Bank details
 router.get('/bank-details', diagnosticAuth, diagnosticController.getBankDetails);
