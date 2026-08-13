@@ -1,0 +1,2 @@
+ALTER TABLE blood_banks ADD COLUMN landmark VARCHAR(255) DEFAULT NULL AFTER address_line2;
+ALTER TABLE blood_banks ADD COLUMN zone_id INT DEFAULT NULL AFTER pincode;

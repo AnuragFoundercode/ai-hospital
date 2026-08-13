@@ -7,6 +7,7 @@ const userSseRoutes = require('./user/sse.routes');
 const doctorRoutes = require('./doctor/doctor.routes');
 const labRoutes = require('./lab/lab.routes');
 const diagnosticRoutes = require('./diagnostic/diagnostic.routes');
+const bloodbankRoutes = require('./bloodbank/bloodbank.routes');
 const adminRoutes = require('./admin/admin.routes');
 const globalRoutes = require('./global.routes');
 
@@ -30,6 +31,9 @@ router.use('/lab', labRoutes);
 
 // Diagnostic center panel
 router.use('/diagnostic', diagnosticRoutes);
+
+// Blood bank panel
+router.use('/bloodbank', bloodbankRoutes);
 
 // Admin panel
 router.use('/admin', adminRoutes);
