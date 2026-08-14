@@ -44,6 +44,7 @@ router.post('/booking/paytm/callback', bookingController.paytmCallback);
 // Lab APIs (token required)
 router.get('/lab-test-categories', userAuth, labController.getTestCategories);
 router.get('/lab-tests', userAuth, labController.searchTests);
+router.get('/lab-test/:id', userAuth, labController.getTestDetail);
 router.get('/labs', userAuth, labController.getLabList);
 router.get('/lab/:id', userAuth, labController.getLabDetail);
 
@@ -53,5 +54,6 @@ router.get('/diagnostics', userAuth, diagnosticController.getDiagnosticList);
 router.get('/diagnostic/:id', userAuth, diagnosticController.getDiagnosticDetail);
 router.get('/diagnostic/:id/services', userAuth, diagnosticController.getDiagnosticServices);
 router.get('/diagnostic-service/:id', userAuth, diagnosticController.getServiceDetail);
+router.get('/diagnostic-service/:id/slots', userAuth, diagnosticController.getServiceSlots);
 
 module.exports = router;

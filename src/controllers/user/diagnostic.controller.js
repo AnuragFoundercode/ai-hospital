@@ -208,7 +208,7 @@ const getDiagnosticServices = async (req, res) => {
     }
 
     const [rows] = await pool.query(
-      `SELECT dsp.id as pricing_id, dsp.service_id, ds.name, ds.description, ds.preparation_instructions, dc.name as category_name, dsp.price, dsp.discount_percent, dsp.duration_minutes, dsp.booking_type, dsp.slot_duration_minutes_config, dsp.working_days, dsp.working_hours_from, dsp.working_hours_to, dsp.break_from, dsp.break_to
+      `SELECT dsp.id as pricing_id, dsp.service_id, ds.name, ds.description, ds.preparation_instructions, ds.is_fasting_required, ds.is_contrast_required, ds.report_delivery_hours, ds.patient_instructions, dc.name as category_name, dsp.price, dsp.discount_percent, dsp.duration_minutes, dsp.booking_type, dsp.slot_duration_minutes_config, dsp.working_days, dsp.working_hours_from, dsp.working_hours_to, dsp.break_from, dsp.break_to
        FROM diagnostic_service_pricing dsp
        JOIN diagnostic_services ds ON dsp.service_id = ds.id
        LEFT JOIN diagnostic_categories dc ON ds.category_id = dc.id
@@ -229,6 +229,10 @@ const getDiagnosticServices = async (req, res) => {
         duration_minutes: r.duration_minutes,
         description: r.description,
         preparation_instructions: r.preparation_instructions,
+        is_fasting_required: r.is_fasting_required,
+        is_contrast_required: r.is_contrast_required,
+        report_delivery_hours: r.report_delivery_hours,
+        patient_instructions: r.patient_instructions,
         booking_type: r.booking_type,
         slot_config: r.booking_type === 'appointment' ? {
           slot_duration: r.slot_duration_minutes_config,
@@ -255,7 +259,7 @@ const getServiceDetail = async (req, res) => {
     const { id } = req.params;
 
     const [rows] = await pool.query(
-      `SELECT dsp.*, ds.name, ds.description, ds.preparation_instructions, ds.duration_minutes as default_duration, dc2.name as category_name, dc.name as center_name, dc.uuid as center_uuid
+      `SELECT dsp.*, ds.name, ds.description, ds.preparation_instructions, ds.is_fasting_required, ds.is_contrast_required, ds.report_delivery_hours, ds.patient_instructions, ds.duration_minutes as default_duration, dc2.name as category_name, dc.name as center_name, dc.uuid as center_uuid
        FROM diagnostic_service_pricing dsp
        JOIN diagnostic_services ds ON dsp.service_id = ds.id
        JOIN diagnostic_centers dc ON dsp.diagnostic_center_id = dc.id
@@ -283,6 +287,10 @@ const getServiceDetail = async (req, res) => {
         duration_minutes: s.duration_minutes,
         description: s.description,
         preparation_instructions: s.preparation_instructions,
+        is_fasting_required: s.is_fasting_required,
+        is_contrast_required: s.is_contrast_required,
+        report_delivery_hours: s.report_delivery_hours,
+        patient_instructions: s.patient_instructions,
         booking_type: s.booking_type,
         slot_config: s.booking_type === 'appointment' ? {
           slot_duration: s.slot_duration_minutes_config,
@@ -300,10 +308,146 @@ const getServiceDetail = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/diagnostic-service/:id/slots?date=2026-08-16
+ * Generate available time slots for a service on a specific date
+ * Uses config from diagnostic_service_pricing (working_days, hours, slot_duration, break)
+ * Excludes already booked slots
+ */
+const getServiceSlots = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({ message: 'date query param required (YYYY-MM-DD).' });
+    }
+
+    // Get service pricing with slot config
+    const [rows] = await pool.query(
+      `SELECT dsp.*, ds.name as service_name
+       FROM diagnostic_service_pricing dsp
+       JOIN diagnostic_services ds ON dsp.service_id = ds.id
+       WHERE dsp.id = ? AND dsp.is_available = 1`,
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Service not found.' });
+    }
+
+    const service = rows[0];
+
+    if (service.booking_type === 'walk_in') {
+      return res.status(200).json({
+        message: 'Walk-in service. No slot selection needed.',
+        data: { booking_type: 'walk_in', slots: [] },
+      });
+    }
+
+    // Check if requested date's day is in working_days
+    const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dateParts = date.split('-');
+    const requestedDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
+    const dayOfWeek = dayNames[requestedDate.getDay()];
+    const workingDays = service.working_days ? service.working_days.split(',').map(d => d.trim().toLowerCase()) : [];
+
+    if (!workingDays.includes(dayOfWeek)) {
+      return res.status(200).json({
+        message: 'Center is closed on this day.',
+        data: { booking_type: 'appointment', date, day: dayOfWeek, is_working_day: false, slots: [] },
+      });
+    }
+
+    // Generate time slots
+    const slotDuration = service.slot_duration_minutes_config || 30;
+    const startTime = service.working_hours_from || '08:00:00';
+    const endTime = service.working_hours_to || '20:00:00';
+    const breakFrom = service.break_from || null;
+    const breakTo = service.break_to || null;
+
+    const toMinutes = (timeStr) => {
+      const parts = timeStr.split(':');
+      return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    };
+
+    const startMinutes = toMinutes(startTime);
+    const endMinutes = toMinutes(endTime);
+    const breakStartMin = breakFrom ? toMinutes(breakFrom) : null;
+    const breakEndMin = breakTo ? toMinutes(breakTo) : null;
+
+    const allSlots = [];
+    let current = startMinutes;
+
+    while (current + slotDuration <= endMinutes) {
+      // Skip break time
+      if (breakStartMin !== null && breakEndMin !== null) {
+        if (current >= breakStartMin && current < breakEndMin) {
+          current = breakEndMin;
+          continue;
+        }
+      }
+
+      const hours = Math.floor(current / 60).toString().padStart(2, '0');
+      const mins = (current % 60).toString().padStart(2, '0');
+      const endHours = Math.floor((current + slotDuration) / 60).toString().padStart(2, '0');
+      const endMins = ((current + slotDuration) % 60).toString().padStart(2, '0');
+
+      allSlots.push({
+        slot_id: `${date.replace(/-/g, '')}_${hours}${mins}`,
+        start_time: `${hours}:${mins}`,
+        end_time: `${endHours}:${endMins}`,
+      });
+
+      current += slotDuration;
+    }
+
+    // Get already booked slots for this date + service
+    const [bookedRows] = await pool.query(
+      `SELECT slot_start_time FROM bookings 
+       WHERE service_type = 'diagnostic_scan' AND provider_id = ? AND booking_date = ? 
+       AND status NOT IN ('cancelled', 'failed')
+       AND JSON_EXTRACT(metadata, '$.service_pricing_id') = ?`,
+      [service.diagnostic_center_id, date, service.id]
+    );
+
+    const bookedTimes = bookedRows.map(b => {
+      if (!b.slot_start_time) return null;
+      const parts = b.slot_start_time.split(':');
+      return `${parts[0]}:${parts[1]}`;
+    }).filter(Boolean);
+
+    // Mark availability
+    const slots = allSlots.map(slot => ({
+      ...slot,
+      is_available: !bookedTimes.includes(slot.start_time),
+    }));
+
+    return res.status(200).json({
+      message: 'Slots fetched.',
+      data: {
+        booking_type: 'appointment',
+        date,
+        day: dayOfWeek,
+        is_working_day: true,
+        service_name: service.service_name,
+        slot_duration_minutes: slotDuration,
+        total_slots: slots.length,
+        available_slots: slots.filter(s => s.is_available).length,
+        slots,
+      },
+    });
+  } catch (error) {
+    console.error('user getServiceSlots error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getCategories,
   getDiagnosticList,
   getDiagnosticDetail,
   getDiagnosticServices,
   getServiceDetail,
+  getServiceSlots,
 };

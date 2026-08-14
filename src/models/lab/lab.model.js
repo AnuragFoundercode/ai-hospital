@@ -49,7 +49,7 @@ const verifyPassword = async (plainPassword, hashedPassword) => {
 };
 
 const updateProfile = async (id, data) => {
-  const allowedFields = ['name', 'owner_name', 'mobile', 'profile_photo', 'lab_license_number', 'gst_number', 'pan_number', 'nabl_accreditation_number', 'nabl_certificate_url', 'lab_license_url', 'gst_certificate_url', 'pan_card_url', 'address_line1', 'address_line2', 'landmark', 'city', 'state', 'pincode', 'zone_id', 'latitude', 'longitude', 'home_collection_available', 'home_collection_radius_km', 'opening_time', 'closing_time'];
+  const allowedFields = ['name', 'owner_name', 'mobile', 'profile_photo', 'about_description', 'lab_license_number', 'gst_number', 'pan_number', 'nabl_accreditation_number', 'nabl_certificate_url', 'lab_license_url', 'gst_certificate_url', 'pan_card_url', 'address_line1', 'address_line2', 'landmark', 'city', 'state', 'pincode', 'zone_id', 'latitude', 'longitude', 'home_collection_available', 'home_collection_radius_km', 'opening_time', 'closing_time'];
   const fields = [];
   const values = [];
 

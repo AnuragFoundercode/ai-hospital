@@ -111,6 +111,30 @@ const getLabReviews = async (labId, limit = 10) => {
   return rows;
 };
 
+// Get test detail by id
+const getTestDetail = async (testId) => {
+  const [rows] = await pool.query(
+    `SELECT lt.id, lt.name, lt.test_code, lt.sample_type, lt.description, lt.preparation_instructions, lt.includes, lt.report_delivery_hours, lt.home_collection_available, ltc.name as category_name
+     FROM lab_tests lt
+     LEFT JOIN lab_test_categories ltc ON lt.category_id = ltc.id
+     WHERE lt.id = ? AND lt.is_active = 1`,
+    [testId]
+  );
+  return rows[0] || null;
+};
+
+// Get price of a test for a specific lab
+const getTestPricing = async (testId, labUuid) => {
+  const [rows] = await pool.query(
+    `SELECT ltp.price, ltp.discount_percent, ltp.report_delivery_hours
+     FROM lab_test_pricing ltp
+     JOIN pathology_labs pl ON ltp.pathology_lab_id = pl.id
+     WHERE ltp.test_id = ? AND pl.uuid = ? AND ltp.is_available = 1`,
+    [testId, labUuid]
+  );
+  return rows[0] || null;
+};
+
 module.exports = {
   getLabList,
   findByUuid,
@@ -118,4 +142,6 @@ module.exports = {
   getTestCategories,
   searchTests,
   getLabReviews,
+  getTestDetail,
+  getTestPricing,
 };

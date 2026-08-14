@@ -86,6 +86,7 @@ const getLabDetail = async (req, res) => {
         name: lab.name,
         profile_photo: lab.profile_photo,
         rating: lab.average_rating,
+        about_description: lab.about_description,
         about: {
           owner_name: lab.owner_name,
           nabl_accreditation: lab.nabl_accreditation_number,
@@ -163,9 +164,53 @@ const searchTests = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/lab-test/:id?lab_id=<lab_uuid>
+ * Full test details with price of specific lab
+ */
+const getTestDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { lab_id } = req.query;
+
+    if (!lab_id) {
+      return res.status(400).json({ message: 'lab_id query param required.' });
+    }
+
+    const test = await labModel.getTestDetail(parseInt(id));
+    if (!test) {
+      return res.status(404).json({ message: 'Test not found.' });
+    }
+
+    const pricing = await labModel.getTestPricing(parseInt(id), lab_id);
+
+    return res.status(200).json({
+      message: 'Test details fetched.',
+      data: {
+        id: test.id,
+        name: test.name,
+        test_code: test.test_code,
+        category: test.category_name,
+        sample_type: test.sample_type,
+        description: test.description,
+        preparation_instructions: test.preparation_instructions,
+        includes: test.includes ? (typeof test.includes === 'string' ? JSON.parse(test.includes) : test.includes) : [],
+        report_delivery_hours: pricing ? pricing.report_delivery_hours : test.report_delivery_hours,
+        home_collection_available: test.home_collection_available,
+        price: pricing ? pricing.price : null,
+        discount_percent: pricing ? pricing.discount_percent : null,
+      },
+    });
+  } catch (error) {
+    console.error('getTestDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getLabList,
   getLabDetail,
   getTestCategories,
   searchTests,
+  getTestDetail,
 };

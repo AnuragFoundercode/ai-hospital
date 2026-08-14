@@ -22,17 +22,52 @@ const getZones = async (req, res) => {
     const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM zones WHERE ${whereClause}`, params);
     const [rows] = await pool.query(`SELECT * FROM zones WHERE ${whereClause} ORDER BY state, name LIMIT ? OFFSET ?`, [...params, parseInt(limit), offset]);
 
+    // Get provider counts per zone
+    const zoneIds = rows.map(z => z.id);
+    let providerCounts = {};
+
+    if (zoneIds.length > 0) {
+      const placeholders = zoneIds.map(() => '?').join(',');
+
+      const [labCounts] = await pool.query(
+        `SELECT zone_id, COUNT(*) as count FROM pathology_labs WHERE zone_id IN (${placeholders}) GROUP BY zone_id`, zoneIds
+      );
+      const [diagnosticCounts] = await pool.query(
+        `SELECT zone_id, COUNT(*) as count FROM diagnostic_centers WHERE zone_id IN (${placeholders}) GROUP BY zone_id`, zoneIds
+      );
+      const [bloodbankCounts] = await pool.query(
+        `SELECT zone_id, COUNT(*) as count FROM blood_banks WHERE zone_id IN (${placeholders}) GROUP BY zone_id`, zoneIds
+      );
+
+      for (const id of zoneIds) {
+        const lab = labCounts.find(r => r.zone_id === id);
+        const diag = diagnosticCounts.find(r => r.zone_id === id);
+        const bb = bloodbankCounts.find(r => r.zone_id === id);
+        providerCounts[id] = {
+          labs: lab ? lab.count : 0,
+          diagnostics: diag ? diag.count : 0,
+          blood_banks: bb ? bb.count : 0,
+          total: (lab ? lab.count : 0) + (diag ? diag.count : 0) + (bb ? bb.count : 0),
+        };
+      }
+    }
+
     return res.status(200).json({
       message: 'Zones fetched.',
-      data: rows.map((z) => ({
-        id: z.id,
-        name: z.name,
-        state: z.state,
-        description: z.description,
-        pincodes: typeof z.pincodes === 'string' ? JSON.parse(z.pincodes) : z.pincodes,
-        is_active: z.is_active,
-        created_at: z.created_at,
-      })),
+      data: rows.map((z) => {
+        const pincodes = typeof z.pincodes === 'string' ? JSON.parse(z.pincodes) : (z.pincodes || []);
+        return {
+          id: z.id,
+          name: z.name,
+          state: z.state,
+          description: z.description,
+          pincodes,
+          pincodes_count: pincodes.length,
+          is_active: z.is_active,
+          providers_count: providerCounts[z.id] || { labs: 0, diagnostics: 0, blood_banks: 0, total: 0 },
+          created_at: z.created_at,
+        };
+      }),
       pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) },
     });
   } catch (error) {
@@ -50,12 +85,28 @@ const getZoneById = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: 'Zone not found.' });
 
     const z = rows[0];
+    const zoneId = z.id;
+    const pincodes = typeof z.pincodes === 'string' ? JSON.parse(z.pincodes) : (z.pincodes || []);
+
+    // Provider counts for this zone
+    const [labCount] = await pool.query('SELECT COUNT(*) as count FROM pathology_labs WHERE zone_id = ?', [zoneId]);
+    const [diagCount] = await pool.query('SELECT COUNT(*) as count FROM diagnostic_centers WHERE zone_id = ?', [zoneId]);
+    const [bbCount] = await pool.query('SELECT COUNT(*) as count FROM blood_banks WHERE zone_id = ?', [zoneId]);
+
     return res.status(200).json({
       message: 'Zone fetched.',
       data: {
         id: z.id, name: z.name, state: z.state, description: z.description,
-        pincodes: typeof z.pincodes === 'string' ? JSON.parse(z.pincodes) : z.pincodes,
-        is_active: z.is_active, created_at: z.created_at,
+        pincodes,
+        pincodes_count: pincodes.length,
+        is_active: z.is_active,
+        providers_count: {
+          labs: labCount[0].count,
+          diagnostics: diagCount[0].count,
+          blood_banks: bbCount[0].count,
+          total: labCount[0].count + diagCount[0].count + bbCount[0].count,
+        },
+        created_at: z.created_at,
       },
     });
   } catch (error) {
