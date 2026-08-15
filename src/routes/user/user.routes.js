@@ -4,6 +4,7 @@ const userController = require('../../controllers/user/user.controller');
 const doctorController = require('../../controllers/user/doctor.controller');
 const bookingController = require('../../controllers/user/booking.controller');
 const labController = require('../../controllers/user/lab.controller');
+const labCartController = require('../../controllers/user/lab-cart.controller');
 const diagnosticController = require('../../controllers/user/diagnostic.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
@@ -47,6 +48,12 @@ router.get('/lab-tests', userAuth, labController.searchTests);
 router.get('/lab-test/:id', userAuth, labController.getTestDetail);
 router.get('/labs', userAuth, labController.getLabList);
 router.get('/lab/:id', userAuth, labController.getLabDetail);
+
+// Lab Cart APIs (token required)
+router.post('/lab-cart/add', userAuth, labCartController.addToCart);
+router.delete('/lab-cart/remove/:pricing_id', userAuth, labCartController.removeFromCart);
+router.get('/lab-cart', userAuth, labCartController.getCart);
+router.delete('/lab-cart/clear', userAuth, labCartController.clearCart);
 
 // Diagnostic APIs (token required)
 router.get('/diagnostic-categories', userAuth, diagnosticController.getCategories);
