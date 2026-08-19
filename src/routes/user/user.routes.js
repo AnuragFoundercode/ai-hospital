@@ -6,6 +6,9 @@ const bookingController = require('../../controllers/user/booking.controller');
 const labController = require('../../controllers/user/lab.controller');
 const labCartController = require('../../controllers/user/lab-cart.controller');
 const diagnosticController = require('../../controllers/user/diagnostic.controller');
+const bloodbankController = require('../../controllers/user/bloodbank.controller');
+const pharmacyController = require('../../controllers/user/pharmacy.controller');
+const ambulanceController = require('../../controllers/user/ambulance.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -19,6 +22,12 @@ router.post('/verify-otp', userController.verifyOtp);
 // Protected routes (token required)
 router.get('/profile', userAuth, userController.getProfile);
 router.put('/profile', userAuth, userController.updateProfile);
+
+// Address APIs
+router.get('/addresses', userAuth, userController.getAddresses);
+router.post('/address', userAuth, userController.addAddress);
+router.put('/address/:id', userAuth, userController.updateAddress);
+router.delete('/address/:id', userAuth, userController.deleteAddress);
 
 // Doctor APIs (token required)
 router.get('/doctor-categories', userAuth, doctorController.getDoctorCategories);
@@ -62,5 +71,40 @@ router.get('/diagnostic/:id', userAuth, diagnosticController.getDiagnosticDetail
 router.get('/diagnostic/:id/services', userAuth, diagnosticController.getDiagnosticServices);
 router.get('/diagnostic-service/:id', userAuth, diagnosticController.getServiceDetail);
 router.get('/diagnostic-service/:id/slots', userAuth, diagnosticController.getServiceSlots);
+
+// Blood Bank APIs (token required)
+router.get('/blood-banks', userAuth, bloodbankController.getBloodBankList);
+router.get('/blood-bank/:id', userAuth, bloodbankController.getBloodBankDetail);
+router.get('/blood-bank/:id/availability', userAuth, bloodbankController.getBloodAvailability);
+router.post('/blood-request', userAuth, bloodbankController.requestBlood);
+router.get('/blood-requests', userAuth, bloodbankController.getBloodRequests);
+router.get('/blood-request/:request_id', userAuth, bloodbankController.getBloodRequestDetail);
+
+// Pharmacy APIs (token required)
+router.get('/medicine-categories', userAuth, pharmacyController.getCategories);
+router.get('/pharmacies', userAuth, pharmacyController.getPharmacyList);
+router.get('/pharmacy/:id', userAuth, pharmacyController.getPharmacyDetail);
+router.get('/pharmacy/:id/reviews', userAuth, pharmacyController.getPharmacyReviews);
+router.get('/pharmacy/:id/medicines', userAuth, pharmacyController.getPharmacyMedicines);
+router.get('/medicine/:id', userAuth, pharmacyController.getMedicineDetail);
+router.get('/medicine/:id/reviews', userAuth, pharmacyController.getMedicineReviews);
+router.post('/medicine/:id/review', userAuth, pharmacyController.addMedicineReview);
+router.post('/pharmacy-cart/add', userAuth, pharmacyController.addToCart);
+router.get('/pharmacy-cart', userAuth, pharmacyController.getCart);
+router.delete('/pharmacy-cart/clear', userAuth, pharmacyController.clearCart);
+router.put('/pharmacy-cart/:id', userAuth, pharmacyController.updateCartItem);
+router.delete('/pharmacy-cart/:id', userAuth, pharmacyController.removeFromCart);
+router.post('/pharmacy-order', userAuth, pharmacyController.createOrder);
+router.get('/pharmacy-orders', userAuth, pharmacyController.getOrders);
+router.get('/pharmacy-order/:order_id', userAuth, pharmacyController.getOrderDetail);
+router.post('/pharmacy-review', userAuth, pharmacyController.addPharmacyReview);
+
+// Ambulance APIs (token required)
+router.get('/ambulance/categories', userAuth, ambulanceController.getCategories);
+router.post('/ambulance/search', userAuth, ambulanceController.searchAmbulance);
+router.post('/ambulance/book', userAuth, ambulanceController.bookAmbulance);
+router.get('/ambulance-bookings', userAuth, ambulanceController.getBookings);
+router.get('/ambulance-booking/:booking_id', userAuth, ambulanceController.getBookingDetail);
+router.post('/ambulance-booking/:booking_id/cancel', userAuth, ambulanceController.cancelBooking);
 
 module.exports = router;

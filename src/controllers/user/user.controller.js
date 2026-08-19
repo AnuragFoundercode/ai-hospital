@@ -178,9 +178,105 @@ const getProfile = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// ADDRESS MANAGEMENT
+// ─────────────────────────────────────────────
+
+const getAddresses = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const [rows] = await pool.query('SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC', [req.user.id]);
+    return res.status(200).json({
+      message: 'Addresses fetched.',
+      data: rows.map(a => ({ id: a.id, label: a.label, name: a.name, mobile: a.mobile, address_line1: a.address_line1, address_line2: a.address_line2, landmark: a.landmark, city: a.city, state: a.state, pincode: a.pincode, latitude: a.latitude, longitude: a.longitude, is_default: a.is_default })),
+    });
+  } catch (error) {
+    console.error('getAddresses error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+const addAddress = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const userId = req.user.id;
+    const { label, name, mobile, address_line1, address_line2, landmark, city, state, pincode, latitude, longitude, is_default } = req.body;
+
+    if (!name || !mobile || !address_line1 || !city || !state || !pincode) {
+      return res.status(400).json({ message: 'Required: name, mobile, address_line1, city, state, pincode' });
+    }
+
+    // If setting as default, remove other defaults
+    if (is_default) {
+      await pool.query('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?', [userId]);
+    }
+
+    const [result] = await pool.query(
+      'INSERT INTO user_addresses (user_id, label, name, mobile, address_line1, address_line2, landmark, city, state, pincode, latitude, longitude, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [userId, label || 'home', name, mobile, address_line1, address_line2 || null, landmark || null, city, state, pincode, latitude || null, longitude || null, is_default ? 1 : 0]
+    );
+
+    return res.status(201).json({ message: 'Address added.', data: { id: result.insertId } });
+  } catch (error) {
+    console.error('addAddress error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+const updateAddress = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const [existing] = await pool.query('SELECT id FROM user_addresses WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!existing.length) return res.status(404).json({ message: 'Address not found.' });
+
+    const allowedFields = ['label', 'name', 'mobile', 'address_line1', 'address_line2', 'landmark', 'city', 'state', 'pincode', 'latitude', 'longitude', 'is_default'];
+    const fields = []; const values = [];
+
+    for (const key of allowedFields) {
+      if (req.body[key] !== undefined) {
+        fields.push(`${key} = ?`);
+        values.push(key === 'is_default' ? (req.body[key] ? 1 : 0) : req.body[key]);
+      }
+    }
+
+    if (!fields.length) return res.status(400).json({ message: 'Nothing to update.' });
+
+    // If setting as default, remove other defaults
+    if (req.body.is_default) {
+      await pool.query('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?', [userId]);
+    }
+
+    values.push(id, userId);
+    await pool.query(`UPDATE user_addresses SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+    return res.status(200).json({ message: 'Address updated.' });
+  } catch (error) {
+    console.error('updateAddress error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+const deleteAddress = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const [result] = await pool.query('DELETE FROM user_addresses WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Address not found.' });
+    return res.status(200).json({ message: 'Address deleted.' });
+  } catch (error) {
+    console.error('deleteAddress error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   sendOtp,
   verifyOtp,
   updateProfile,
   getProfile,
+  getAddresses,
+  addAddress,
+  updateAddress,
+  deleteAddress,
 };

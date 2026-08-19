@@ -738,11 +738,11 @@ const createLabBooking = async (req, res) => {
 
     // Get test pricing for this lab
     const [testPricing] = await pool.query(
-      `SELECT ltp.test_id, ltp.price, ltp.discount_percent, lt.name as test_name
+      `SELECT ltp.id as pricing_id, ltp.test_id, ltp.price, ltp.discount_percent, lt.name as test_name
        FROM lab_test_pricing ltp
        JOIN lab_tests lt ON ltp.test_id = lt.id
-       WHERE ltp.pathology_lab_id = ? AND ltp.test_id IN (?) AND ltp.is_available = 1`,
-      [lab.id, test_ids]
+       WHERE ltp.pathology_lab_id = ? AND (ltp.test_id IN (?) OR ltp.id IN (?)) AND ltp.is_available = 1`,
+      [lab.id, test_ids, test_ids]
     );
 
     if (!testPricing.length) {
@@ -790,6 +790,9 @@ const createLabBooking = async (req, res) => {
     });
 
     await bookingModel.addStatusHistory(booking.id, null, 'pending', 'user', userId, 'Lab test booking created');
+
+    // Clear user's lab cart after successful booking creation
+    await pool.query('DELETE FROM lab_cart WHERE user_id = ?', [userId]);
 
     // Initiate Paytm
     let paytmData = null;

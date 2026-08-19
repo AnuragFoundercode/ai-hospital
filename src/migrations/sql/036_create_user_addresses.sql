@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS user_addresses (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  label ENUM('home', 'work', 'other') DEFAULT 'home',
+  name VARCHAR(150) NOT NULL,
+  mobile VARCHAR(15) NOT NULL,
+  address_line1 VARCHAR(255) NOT NULL,
+  address_line2 VARCHAR(255) DEFAULT NULL,
+  landmark VARCHAR(255) DEFAULT NULL,
+  city VARCHAR(100) NOT NULL,
+  state VARCHAR(100) NOT NULL,
+  pincode VARCHAR(10) NOT NULL,
+  latitude DECIMAL(10, 8) DEFAULT NULL,
+  longitude DECIMAL(11, 8) DEFAULT NULL,
+  is_default TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_user (user_id)
+);

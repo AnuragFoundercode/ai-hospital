@@ -63,7 +63,7 @@ const findByUuid = async (uuid) => {
 // Get tests offered by a lab
 const getLabTests = async (labId) => {
   const [rows] = await pool.query(
-    `SELECT lt.id, lt.name, lt.test_code, lt.sample_type, ltc.name as category_name,
+    `SELECT ltp.id as pricing_id, lt.id as test_id, lt.name, lt.test_code, lt.sample_type, ltc.name as category_name,
             ltp.price, ltp.discount_percent, ltp.report_delivery_hours
      FROM lab_test_pricing ltp
      JOIN lab_tests lt ON ltp.test_id = lt.id

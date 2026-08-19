@@ -70,7 +70,8 @@ const getLabDetail = async (req, res) => {
       const cat = test.category_name || 'Other';
       if (!testsByCategory[cat]) testsByCategory[cat] = [];
       testsByCategory[cat].push({
-        id: test.id,
+        id: test.pricing_id,
+        test_id: test.test_id,
         name: test.name,
         test_code: test.test_code,
         sample_type: test.sample_type,

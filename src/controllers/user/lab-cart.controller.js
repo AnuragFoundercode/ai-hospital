@@ -40,7 +40,7 @@ const addToCart = async (req, res) => {
       [userId]
     );
 
-    if (cartItems.length && cartItems[0].lab_id !== pricing.pathology_lab_id) {
+    if (cartItems.length && parseInt(cartItems[0].lab_id) !== parseInt(pricing.pathology_lab_id)) {
       return res.status(400).json({
         message: 'Cart mein sirf ek lab ke tests add ho sakte hain. Pehle cart clear karo ya same lab ka test add karo.',
       });
