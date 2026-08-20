@@ -8,7 +8,6 @@ const labCartController = require('../../controllers/user/lab-cart.controller');
 const diagnosticController = require('../../controllers/user/diagnostic.controller');
 const bloodbankController = require('../../controllers/user/bloodbank.controller');
 const pharmacyController = require('../../controllers/user/pharmacy.controller');
-const ambulanceController = require('../../controllers/user/ambulance.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -98,13 +97,5 @@ router.post('/pharmacy-order', userAuth, pharmacyController.createOrder);
 router.get('/pharmacy-orders', userAuth, pharmacyController.getOrders);
 router.get('/pharmacy-order/:order_id', userAuth, pharmacyController.getOrderDetail);
 router.post('/pharmacy-review', userAuth, pharmacyController.addPharmacyReview);
-
-// Ambulance APIs (token required)
-router.get('/ambulance/categories', userAuth, ambulanceController.getCategories);
-router.post('/ambulance/search', userAuth, ambulanceController.searchAmbulance);
-router.post('/ambulance/book', userAuth, ambulanceController.bookAmbulance);
-router.get('/ambulance-bookings', userAuth, ambulanceController.getBookings);
-router.get('/ambulance-booking/:booking_id', userAuth, ambulanceController.getBookingDetail);
-router.post('/ambulance-booking/:booking_id/cancel', userAuth, ambulanceController.cancelBooking);
 
 module.exports = router;
