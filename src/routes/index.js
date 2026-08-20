@@ -39,6 +39,10 @@ router.use('/bloodbank', bloodbankRoutes);
 const pharmacyRoutes = require('./pharmacy/pharmacy.routes');
 router.use('/pharmacy', pharmacyRoutes);
 
+// Delivery Partner panel
+const deliveryRoutes = require('./delivery/delivery.routes');
+router.use('/delivery', deliveryRoutes);
+
 // Admin panel
 router.use('/admin', adminRoutes);
 

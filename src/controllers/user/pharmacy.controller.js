@@ -246,7 +246,15 @@ const getOrderDetail = async (req, res) => {
     const [rows] = await pool.query(`SELECT po.*, p.uuid as pharmacy_uuid, p.name as pharmacy_name, p.mobile as pharmacy_mobile FROM pharmacy_orders po JOIN pharmacies p ON po.pharmacy_id = p.id WHERE po.order_id = ? AND po.user_id = ?`, [req.params.order_id, req.user.id]);
     if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
     const o = rows[0];
-    return res.status(200).json({ message: 'Order detail fetched.', data: { order_id: o.order_id, status: o.status, items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items, total_items: o.total_items, prescription: { required: o.prescription_required, url: o.prescription_url }, pricing: { base_amount: o.base_amount, discount_amount: o.discount_amount, delivery_charge: o.delivery_charge, final_amount: o.final_amount }, payment: { method: o.payment_method, status: o.payment_status, transaction_id: o.transaction_id, paid_at: o.paid_at }, delivery_address: typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : o.delivery_address, remark: o.remark, pharmacy: { id: o.pharmacy_uuid, name: o.pharmacy_name, mobile: o.pharmacy_mobile }, timeline: { created_at: o.created_at, accepted_at: o.accepted_at, packed_at: o.packed_at, ready_at: o.ready_at, dispatched_at: o.dispatched_at, delivered_at: o.delivered_at, cancelled_at: o.cancelled_at }, rejection_reason: o.rejection_reason } });
+
+    // Get delivery OTP if order is out_for_delivery
+    let deliveryOtp = null;
+    if (['out_for_delivery'].includes(o.status) && o.delivery_request_id) {
+      const [drRows] = await pool.query('SELECT delivery_otp FROM delivery_requests WHERE id = ?', [o.delivery_request_id]);
+      if (drRows.length) deliveryOtp = drRows[0].delivery_otp;
+    }
+
+    return res.status(200).json({ message: 'Order detail fetched.', data: { order_id: o.order_id, status: o.status, delivery_otp: deliveryOtp, items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items, total_items: o.total_items, prescription: { required: o.prescription_required, url: o.prescription_url }, pricing: { base_amount: o.base_amount, discount_amount: o.discount_amount, delivery_charge: o.delivery_charge, final_amount: o.final_amount }, payment: { method: o.payment_method, status: o.payment_status, transaction_id: o.transaction_id, paid_at: o.paid_at }, delivery_address: typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : o.delivery_address, remark: o.remark, pharmacy: { id: o.pharmacy_uuid, name: o.pharmacy_name, mobile: o.pharmacy_mobile }, timeline: { created_at: o.created_at, accepted_at: o.accepted_at, packed_at: o.packed_at, ready_at: o.ready_at, dispatched_at: o.dispatched_at, delivered_at: o.delivered_at, cancelled_at: o.cancelled_at }, rejection_reason: o.rejection_reason } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 

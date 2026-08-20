@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS delivery_bank_details (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  delivery_partner_id INT NOT NULL UNIQUE,
+  account_holder_name VARCHAR(150) NOT NULL,
+  bank_name VARCHAR(150) NOT NULL,
+  account_number VARCHAR(30) NOT NULL,
+  ifsc_code VARCHAR(15) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (delivery_partner_id) REFERENCES delivery_partners(id) ON DELETE CASCADE
+);

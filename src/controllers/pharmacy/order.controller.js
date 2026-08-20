@@ -130,6 +130,51 @@ const updateOrderStatus = async (req, res) => {
     const timestampField = { packing: 'packed_at', ready: 'ready_at', out_for_delivery: 'dispatched_at', delivered: 'delivered_at' };
     await pool.query(`UPDATE pharmacy_orders SET status = ?, ${timestampField[status]} = NOW() WHERE id = ?`, [status, order.id]);
 
+    // When order is ready → create delivery request for nearby partners
+    if (status === 'ready') {
+      try {
+        const [pharmacyRows] = await pool.query('SELECT latitude, longitude, address_line1, city FROM pharmacies WHERE id = ?', [order.pharmacy_id]);
+        const [orderRows] = await pool.query('SELECT delivery_address FROM pharmacy_orders WHERE id = ?', [order.id]);
+        const deliveryAddress = typeof orderRows[0].delivery_address === 'string' ? JSON.parse(orderRows[0].delivery_address) : orderRows[0].delivery_address;
+
+        if (pharmacyRows[0] && deliveryAddress) {
+          const pickupLat = parseFloat(pharmacyRows[0].latitude);
+          const pickupLng = parseFloat(pharmacyRows[0].longitude);
+          const dropLat = parseFloat(deliveryAddress.latitude || 0);
+          const dropLng = parseFloat(deliveryAddress.longitude || 0);
+
+          // Haversine distance
+          const R = 6371;
+          const dLat = (dropLat - pickupLat) * Math.PI / 180;
+          const dLon = (dropLng - pickupLng) * Math.PI / 180;
+          const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pickupLat*Math.PI/180)*Math.cos(dropLat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+          const distanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+          const [configRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'delivery_per_km_charge'");
+          const perKmCharge = configRows.length ? parseFloat(configRows[0].config_value) : 12;
+          const deliveryEarning = parseFloat((distanceKm * perKmCharge).toFixed(2));
+          const requestId = `DEL-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+          await pool.query(
+            "INSERT INTO delivery_requests (request_id, order_id, pharmacy_id, pickup_address, pickup_latitude, pickup_longitude, drop_address, drop_latitude, drop_longitude, distance_km, per_km_charge, delivery_earning, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching')",
+            [requestId, order.id, order.pharmacy_id, `${pharmacyRows[0].address_line1}, ${pharmacyRows[0].city}`, pickupLat, pickupLng, `${deliveryAddress.address_line1 || ''}, ${deliveryAddress.city || ''}`, dropLat, dropLng, distanceKm.toFixed(2), perKmCharge, deliveryEarning]
+          );
+
+          // Notify nearby delivery partners
+          const { sendToClient } = require('../../events/sse');
+          const [nearbyPartners] = await pool.query(
+            "SELECT id, fcm_token FROM delivery_partners WHERE is_online = 1 AND is_active = 1 AND verification_status = 'approved' AND latitude IS NOT NULL AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= 5",
+            [pickupLat, pickupLng, pickupLat]
+          );
+
+          for (const dp of nearbyPartners) {
+            sendToClient(`delivery_${dp.id}`, 'new_delivery_request', { request_id: requestId, pickup_address: pharmacyRows[0].address_line1, distance_km: distanceKm.toFixed(2), earning: deliveryEarning });
+            if (dp.fcm_token) await notificationService.sendToDevice(dp.fcm_token, 'New Delivery 🛵', `₹${deliveryEarning} | ${distanceKm.toFixed(1)} km`, { type: 'new_delivery', request_id: requestId });
+          }
+        }
+      } catch (delErr) { console.error('Delivery request creation error:', delErr.message); }
+    }
+
     // On delivered → credit wallet (minus admin commission), mark COD as paid
     if (status === 'delivered') {
       const [pharmacy] = await pool.query('SELECT admin_commission_percent FROM pharmacies WHERE id = ?', [order.pharmacy_id]);
