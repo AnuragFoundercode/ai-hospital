@@ -179,13 +179,19 @@ const getProfile = async (req, res) => {
     const [rows] = await pool.query('SELECT dp.*, z.name as zone_name FROM delivery_partners dp LEFT JOIN zones z ON dp.zone_id = z.id WHERE dp.id = ?', [req.delivery.id]);
     if (!rows.length) return res.status(404).json({ message: 'Partner not found.' });
     const p = rows[0];
+
+    // Get bank details
+    const [bankRows] = await pool.query('SELECT account_holder_name, bank_name, account_number, ifsc_code FROM delivery_bank_details WHERE delivery_partner_id = ?', [req.delivery.id]);
+    const bank = bankRows[0] || null;
+
     return res.status(200).json({
       message: 'Profile fetched.',
       data: {
         id: p.uuid, mobile: p.mobile, registration_step: p.registration_step, verification_status: p.verification_status, rejection_reason: p.rejection_reason,
         personal: { full_name: p.full_name, email: p.email, date_of_birth: p.date_of_birth, gender: p.gender, profile_photo: p.profile_photo },
-        vehicle: { vehicle_type: p.vehicle_type, rc_number: p.rc_number, dl_number: p.dl_number, zone_id: p.zone_id, zone_name: p.zone_name },
+        vehicle: { vehicle_type: p.vehicle_type, vehicle_type_id: p.vehicle_type_id, rc_number: p.rc_number, dl_number: p.dl_number, zone_id: p.zone_id, zone_name: p.zone_name },
         documents: { aadhaar_front_url: p.aadhaar_front_url, aadhaar_back_url: p.aadhaar_back_url, pan_card_url: p.pan_card_url, driving_licence_url: p.driving_licence_url, rider_selfie_url: p.rider_selfie_url },
+        bank: bank,
         status: { is_online: p.is_online, is_active: p.is_active },
         stats: { average_rating: p.average_rating, total_deliveries: p.total_deliveries, total_earned: p.total_earned },
       },
@@ -227,6 +233,72 @@ const updateLocation = async (req, res) => {
     await pool.query('UPDATE delivery_partners SET latitude = ?, longitude = ?, last_location_update = NOW() WHERE id = ?', [latitude, longitude, req.delivery.id]);
     return res.status(200).json({ message: 'Location updated.' });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
+ * GET /api/v1/delivery/active
+ * Current active delivery (assigned or picked_up) - shows on main screen
+ */
+const getActiveDelivery = async (req, res) => {
+  try {
+    const partnerId = req.delivery.id;
+
+    const [rows] = await pool.query(
+      `SELECT dr.*, p.name as pharmacy_name, p.mobile as pharmacy_mobile, p.address_line1 as pharmacy_address,
+              po.order_id as order_number, po.total_items, po.final_amount, po.payment_method,
+              u.full_name as customer_name, u.mobile as customer_mobile
+       FROM delivery_requests dr
+       JOIN pharmacies p ON dr.pharmacy_id = p.id
+       JOIN pharmacy_orders po ON dr.order_id = po.id
+       JOIN users u ON po.user_id = u.id
+       WHERE dr.partner_id = ? AND dr.status IN ('assigned', 'picked_up')
+       ORDER BY dr.assigned_at DESC LIMIT 1`,
+      [partnerId]
+    );
+
+    if (!rows.length) {
+      return res.status(200).json({ message: 'No active delivery.', data: null });
+    }
+
+    const d = rows[0];
+
+    return res.status(200).json({
+      message: 'Active delivery fetched.',
+      data: {
+        id: d.id,
+        request_id: d.request_id,
+        status: d.status,
+        pickup: {
+          address: d.pickup_address,
+          latitude: d.pickup_latitude,
+          longitude: d.pickup_longitude,
+          pharmacy_name: d.pharmacy_name,
+          pharmacy_mobile: d.pharmacy_mobile,
+        },
+        drop: {
+          address: d.drop_address,
+          latitude: d.drop_latitude,
+          longitude: d.drop_longitude,
+          customer_name: d.customer_name,
+          customer_mobile: d.customer_mobile,
+        },
+        order: {
+          order_id: d.order_number,
+          total_items: d.total_items,
+          amount: d.final_amount,
+          payment_method: d.payment_method,
+        },
+        distance_km: d.distance_km,
+        delivery_earning: d.delivery_earning,
+        delivery_otp: d.delivery_otp,
+        assigned_at: d.assigned_at,
+        picked_up_at: d.picked_up_at,
+      },
+    });
+  } catch (error) {
+    console.error('delivery getActiveDelivery error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
 };
 
 /**
@@ -440,4 +512,4 @@ const getEarnings = async (req, res) => {
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
-module.exports = { sendOtp, verifyOtp, step1Personal, step2Vehicle, step3Documents, step4Bank, getProfile, getVehicleTypes, toggleOnline, updateLocation, getDeliveryRequests, acceptDelivery, rejectDelivery, markPickedUp, markDelivered, getDeliveryHistory, getEarnings };
+module.exports = { sendOtp, verifyOtp, step1Personal, step2Vehicle, step3Documents, step4Bank, getProfile, getVehicleTypes, toggleOnline, updateLocation, getActiveDelivery, getDeliveryRequests, acceptDelivery, rejectDelivery, markPickedUp, markDelivered, getDeliveryHistory, getEarnings };

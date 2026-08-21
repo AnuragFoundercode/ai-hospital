@@ -12,7 +12,7 @@ const paytmConfig = require('../../config/paytm');
  */
 const getBloodBankList = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search, city, blood_group } = req.query;
+    const { page = 1, limit = 10, search, city, blood_group, pincode } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let where = ['bb.is_active = 1', 'bb.is_verified = 1'];
@@ -27,6 +27,13 @@ const getBloodBankList = async (req, res) => {
     if (city) {
       where.push('bb.city = ?');
       params.push(city);
+    }
+
+    // Zone filter by pincode
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) { where.push('bb.zone_id = ?'); params.push(zoneRows[0].id); }
+      else { return res.status(200).json({ message: 'No service available in this pincode.', data: [], pagination: { page: parseInt(page), limit: parseInt(limit), total: 0, total_pages: 0 } }); }
     }
 
     if (blood_group) {

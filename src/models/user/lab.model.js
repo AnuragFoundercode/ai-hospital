@@ -5,7 +5,7 @@ const { pool } = require('../../config/database');
 // ─────────────────────────────────────────────
 
 // Get labs list with search & pagination
-const getLabList = async ({ page = 1, limit = 10, search, test_id, city }) => {
+const getLabList = async ({ page = 1, limit = 10, search, test_id, city, zone_id }) => {
   const offset = (page - 1) * limit;
   let where = ['l.is_active = 1', 'l.is_verified = 1'];
   let params = [];
@@ -21,6 +21,12 @@ const getLabList = async ({ page = 1, limit = 10, search, test_id, city }) => {
   if (city) {
     where.push('l.city = ?');
     params.push(city);
+  }
+
+  // Filter by zone
+  if (zone_id) {
+    where.push('l.zone_id = ?');
+    params.push(zone_id);
   }
 
   // Filter by test availability

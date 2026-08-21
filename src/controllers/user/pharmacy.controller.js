@@ -23,7 +23,11 @@ const getPharmacyList = async (req, res) => {
     let where = ['p.is_active = 1', 'p.is_verified = 1']; let params = []; let join = '';
 
     if (search) { where.push('p.name LIKE ?'); params.push(`%${search}%`); }
-    if (pincode) { where.push('p.pincode = ?'); params.push(pincode); }
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) { where.push('p.zone_id = ?'); params.push(zoneRows[0].id); }
+      else { return res.status(200).json({ message: 'No service available in this pincode.', data: [], pagination: { page: parseInt(page), limit: parseInt(limit), total: 0, total_pages: 0 } }); }
+    }
     if (category_id) { join = 'JOIN pharmacy_medicines pm2 ON p.id = pm2.pharmacy_id AND pm2.category_id = ? AND pm2.is_active = 1 AND pm2.quantity > 0'; params.unshift(parseInt(category_id)); }
 
     const whereClause = where.join(' AND ');
@@ -166,10 +170,15 @@ const clearCart = async (req, res) => {
 const createOrder = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { prescription_url, remark, payment_method, delivery_address } = req.body;
+    const { prescription_url, remark, payment_method, address_id } = req.body;
 
     if (!payment_method || !['online', 'cod'].includes(payment_method)) return res.status(400).json({ message: 'payment_method (online/cod) required.' });
-    if (!delivery_address) return res.status(400).json({ message: 'delivery_address required.' });
+    if (!address_id) return res.status(400).json({ message: 'address_id required.' });
+
+    // Fetch address from user_addresses
+    const [addrRows] = await pool.query('SELECT * FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+    if (!addrRows.length) return res.status(404).json({ message: 'Address not found.' });
+    const delivery_address = { name: addrRows[0].name, mobile: addrRows[0].mobile, address_line1: addrRows[0].address_line1, address_line2: addrRows[0].address_line2, landmark: addrRows[0].landmark, city: addrRows[0].city, state: addrRows[0].state, pincode: addrRows[0].pincode, latitude: addrRows[0].latitude, longitude: addrRows[0].longitude };
 
     // Get cart
     const [cartItems] = await pool.query(`SELECT pc.*, pm.name, pm.selling_price, pm.mrp, pm.prescription_required, pm.quantity as stock FROM pharmacy_cart pc JOIN pharmacy_medicines pm ON pc.medicine_id = pm.id WHERE pc.user_id = ?`, [userId]);
@@ -361,4 +370,73 @@ const addPharmacyReview = async (req, res) => {
   } catch (error) { console.error('addPharmacyReview error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
-module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview };
+/**
+ * GET /api/v1/user/search-medicines?search=dolo&pincode=226001
+ * Search medicines by name, return which pharmacies have it (filtered by user pincode/zone)
+ */
+const searchMedicines = async (req, res) => {
+  try {
+    const { search, pincode } = req.query;
+    if (!search || search.trim().length < 2) return res.status(400).json({ message: 'search (min 2 chars) required.' });
+
+    let zoneFilter = '';
+    let zoneParams = [];
+
+    // If pincode provided, find zone and filter pharmacies by same zone
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) {
+        zoneFilter = 'AND p.zone_id = ?';
+        zoneParams = [zoneRows[0].id];
+      }
+    }
+
+    const [rows] = await pool.query(
+      `SELECT pm.id as medicine_id, pm.name, pm.generic_name, pm.mrp, pm.selling_price, pm.medicine_image_url, pm.prescription_required, mc.name as category_name,
+              p.uuid as pharmacy_uuid, p.name as pharmacy_name, p.profile_photo as pharmacy_photo, p.pincode as pharmacy_pincode, p.delivery_charge, p.free_delivery_above
+       FROM pharmacy_medicines pm
+       JOIN pharmacies p ON pm.pharmacy_id = p.id
+       LEFT JOIN medicine_categories mc ON pm.category_id = mc.id
+       WHERE pm.name LIKE ? AND pm.is_active = 1 AND pm.quantity > 0 AND p.is_active = 1 AND p.is_verified = 1 ${zoneFilter}
+       ORDER BY pm.selling_price ASC
+       LIMIT 50`,
+      [`%${search}%`, ...zoneParams]
+    );
+
+    // Group by medicine name
+    const medicineMap = {};
+    for (const r of rows) {
+      const key = `${r.name}_${r.generic_name}`;
+      if (!medicineMap[key]) {
+        medicineMap[key] = {
+          name: r.name,
+          generic_name: r.generic_name,
+          category: r.category_name,
+          image: r.medicine_image_url,
+          prescription_required: r.prescription_required,
+          available_at: [],
+        };
+      }
+      medicineMap[key].available_at.push({
+        medicine_id: r.medicine_id,
+        pharmacy_id: r.pharmacy_uuid,
+        pharmacy_name: r.pharmacy_name,
+        pharmacy_photo: r.pharmacy_photo,
+        mrp: r.mrp,
+        selling_price: r.selling_price,
+        delivery_charge: r.delivery_charge,
+        free_delivery_above: r.free_delivery_above,
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Medicines found.',
+      data: Object.values(medicineMap),
+    });
+  } catch (error) {
+    console.error('searchMedicines error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview, searchMedicines };

@@ -23,7 +23,7 @@ const getCategories = async (req, res) => {
  */
 const getDiagnosticList = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search, category_id, city } = req.query;
+    const { page = 1, limit = 10, search, category_id, city, pincode } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let where = ['dc.is_active = 1', 'dc.is_verified = 1'];
@@ -38,6 +38,13 @@ const getDiagnosticList = async (req, res) => {
     if (city) {
       where.push('dc.city = ?');
       params.push(city);
+    }
+
+    // Zone filter by pincode
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) { where.push('dc.zone_id = ?'); params.push(zoneRows[0].id); }
+      else { return res.status(200).json({ message: 'No service available in this pincode.', data: [], pagination: { page: parseInt(page), limit: parseInt(limit), total: 0, total_pages: 0 } }); }
     }
 
     if (category_id) {
@@ -379,6 +386,12 @@ const getServiceSlots = async (req, res) => {
     const allSlots = [];
     let current = startMinutes;
 
+    // If booking for today, skip past time slots
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const isToday = date === todayStr;
+    const currentTimeMinutes = isToday ? (now.getHours() * 60 + now.getMinutes()) : 0;
+
     while (current + slotDuration <= endMinutes) {
       // Skip break time
       if (breakStartMin !== null && breakEndMin !== null) {
@@ -386,6 +399,12 @@ const getServiceSlots = async (req, res) => {
           current = breakEndMin;
           continue;
         }
+      }
+
+      // Skip past slots if today
+      if (isToday && current < currentTimeMinutes) {
+        current += slotDuration;
+        continue;
       }
 
       const hours = Math.floor(current / 60).toString().padStart(2, '0');

@@ -57,6 +57,10 @@ router.get('/lab-test/:id', userAuth, labController.getTestDetail);
 router.get('/labs', userAuth, labController.getLabList);
 router.get('/lab/:id', userAuth, labController.getLabDetail);
 
+// Lab Booking History
+router.get('/lab-bookings', userAuth, labController.getLabBookings);
+router.get('/lab-booking/:booking_id', userAuth, labController.getLabBookingDetail);
+
 // Lab Cart APIs (token required)
 router.post('/lab-cart/add', userAuth, labCartController.addToCart);
 router.delete('/lab-cart/remove/:pricing_id', userAuth, labCartController.removeFromCart);
@@ -88,6 +92,7 @@ router.get('/pharmacy/:id/medicines', userAuth, pharmacyController.getPharmacyMe
 router.get('/medicine/:id', userAuth, pharmacyController.getMedicineDetail);
 router.get('/medicine/:id/reviews', userAuth, pharmacyController.getMedicineReviews);
 router.post('/medicine/:id/review', userAuth, pharmacyController.addMedicineReview);
+router.get('/search-medicines', userAuth, pharmacyController.searchMedicines);
 router.post('/pharmacy-cart/add', userAuth, pharmacyController.addToCart);
 router.get('/pharmacy-cart', userAuth, pharmacyController.getCart);
 router.delete('/pharmacy-cart/clear', userAuth, pharmacyController.clearCart);

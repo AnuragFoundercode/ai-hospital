@@ -22,6 +22,7 @@ router.put('/toggle-online', deliveryAuth, deliveryController.toggleOnline);
 router.put('/location', deliveryAuth, deliveryController.updateLocation);
 
 // Delivery Requests
+router.get('/active', deliveryAuth, deliveryController.getActiveDelivery);
 router.get('/requests', deliveryAuth, deliveryController.getDeliveryRequests);
 router.put('/request/:id/accept', deliveryAuth, deliveryController.acceptDelivery);
 router.put('/request/:id/reject', deliveryAuth, deliveryController.rejectDelivery);
