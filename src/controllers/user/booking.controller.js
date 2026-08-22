@@ -300,41 +300,74 @@ const confirmPayment = async (req, res) => {
 const getMyBookings = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { page = 1, limit = 10, status } = req.query;
+    const { page = 1, limit = 10, status, type } = req.query;
 
-    const result = await bookingModel.getUserBookings(userId, {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      status: status || null,
-    });
+    let allBookings = [];
 
-    const bookings = result.bookings.map((b) => ({
-      booking_id: b.booking_id,
-      service_type: b.service_type,
-      doctor_name: b.doctor_name,
-      doctor_photo: b.doctor_photo,
-      category: b.category_name,
-      date: b.booking_date,
-      slot_time: b.slot_start_time,
-      status: b.status,
-      payment_status: b.payment_status,
-      amount: b.final_amount,
-      created_at: b.created_at,
-    }));
+    // 1. Doctor + Lab + Diagnostic (from bookings table)
+    if (!type || ['doctor', 'lab', 'diagnostic'].includes(type)) {
+      let bWhere = ['b.user_id = ?'];
+      let bParams = [userId];
+      if (status) { bWhere.push('b.status = ?'); bParams.push(status); }
+      if (type === 'doctor') bWhere.push("b.service_type = 'doctor_consultation'");
+      else if (type === 'lab') bWhere.push("b.service_type = 'pathology_test'");
+      else if (type === 'diagnostic') bWhere.push("b.service_type = 'diagnostic_scan'");
 
-    return res.status(200).json({      message: 'Bookings fetched.',
-      data: bookings,
-      pagination: {
-        page: result.page,
-        limit: result.limit,
-        total: result.total,
-        total_pages: Math.ceil(result.total / result.limit),
-      },
+      const [bRows] = await pool.query(
+        `SELECT b.booking_id, b.service_type, b.status, b.final_amount, b.payment_status, b.booking_date, b.slot_start_time, b.created_at FROM bookings b WHERE ${bWhere.join(' AND ')} ORDER BY b.created_at DESC`,
+        bParams
+      );
+      for (const b of bRows) {
+        allBookings.push({ booking_id: b.booking_id, service_type: b.service_type, status: b.status, amount: b.final_amount, payment_status: b.payment_status, date: b.booking_date, slot_time: b.slot_start_time, created_at: b.created_at });
+      }
+    }
+
+    // 2. Pharmacy orders
+    if (!type || type === 'pharmacy') {
+      let pWhere = ['po.user_id = ?'];
+      let pParams = [userId];
+      if (status) { pWhere.push('po.status = ?'); pParams.push(status); }
+
+      const [pRows] = await pool.query(
+        `SELECT po.order_id, po.status, po.final_amount, po.payment_status, po.created_at, p.name as pharmacy_name FROM pharmacy_orders po JOIN pharmacies p ON po.pharmacy_id = p.id WHERE ${pWhere.join(' AND ')} ORDER BY po.created_at DESC`,
+        pParams
+      );
+      for (const p of pRows) {
+        allBookings.push({ booking_id: p.order_id, service_type: 'medicine_order', status: p.status, amount: p.final_amount, payment_status: p.payment_status, date: null, slot_time: null, pharmacy_name: p.pharmacy_name, created_at: p.created_at });
+      }
+    }
+
+    // 3. Blood requests
+    if (!type || type === 'blood') {
+      let brWhere = ['br.user_id = ?'];
+      let brParams = [userId];
+      if (status) { brWhere.push('br.status = ?'); brParams.push(status); }
+
+      const [brRows] = await pool.query(
+        `SELECT br.request_id, br.status, br.total_amount, br.payment_status, br.required_date, br.created_at, bb.name as bank_name FROM blood_requests br JOIN blood_banks bb ON br.blood_bank_id = bb.id WHERE ${brWhere.join(' AND ')} ORDER BY br.created_at DESC`,
+        brParams
+      );
+      for (const br of brRows) {
+        allBookings.push({ booking_id: br.request_id, service_type: 'blood_request', status: br.status, amount: br.total_amount, payment_status: br.payment_status, date: br.required_date, slot_time: null, bank_name: br.bank_name, created_at: br.created_at });
+      }
+    }
+
+    // Sort by latest
+    allBookings.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    // Paginate
+    const total = allBookings.length;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const paginated = allBookings.slice(offset, offset + parseInt(limit));
+
+    return res.status(200).json({
+      message: 'Bookings fetched.',
+      data: paginated,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, total_pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
     console.error('getMyBookings error:', error.message);
-    return res.status(500).json({      message: 'Something went wrong.',
-    });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -1015,6 +1048,84 @@ const createDiagnosticBooking = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/all-bookings?status=&type=&page=&limit=
+ * Unified booking history - all types (doctor, lab, diagnostic, pharmacy, blood)
+ */
+const getAllBookings = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { status, type, page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let allBookings = [];
+
+    // 1. Doctor + Lab + Diagnostic bookings (from bookings table)
+    if (!type || ['doctor', 'lab', 'diagnostic'].includes(type)) {
+      let bWhere = ['b.user_id = ?'];
+      let bParams = [userId];
+      if (status) { bWhere.push('b.status = ?'); bParams.push(status); }
+      if (type === 'doctor') bWhere.push("b.service_type = 'doctor_consultation'");
+      else if (type === 'lab') bWhere.push("b.service_type = 'pathology_test'");
+      else if (type === 'diagnostic') bWhere.push("b.service_type = 'diagnostic_scan'");
+
+      const [bRows] = await pool.query(
+        `SELECT b.booking_id as id, b.service_type as type, b.status, b.final_amount as amount, b.payment_status, b.booking_date, b.created_at FROM bookings b WHERE ${bWhere.join(' AND ')} ORDER BY b.created_at DESC`,
+        bParams
+      );
+      for (const b of bRows) {
+        allBookings.push({ id: b.id, type: b.type === 'doctor_consultation' ? 'doctor' : b.type === 'pathology_test' ? 'lab' : 'diagnostic', status: b.status, amount: b.amount, payment_status: b.payment_status, date: b.booking_date, created_at: b.created_at });
+      }
+    }
+
+    // 2. Pharmacy orders
+    if (!type || type === 'pharmacy') {
+      let pWhere = ['po.user_id = ?'];
+      let pParams = [userId];
+      if (status) { pWhere.push('po.status = ?'); pParams.push(status); }
+
+      const [pRows] = await pool.query(
+        `SELECT po.order_id as id, po.status, po.final_amount as amount, po.payment_status, po.created_at, p.name as provider_name FROM pharmacy_orders po JOIN pharmacies p ON po.pharmacy_id = p.id WHERE ${pWhere.join(' AND ')} ORDER BY po.created_at DESC`,
+        pParams
+      );
+      for (const p of pRows) {
+        allBookings.push({ id: p.id, type: 'pharmacy', status: p.status, amount: p.amount, payment_status: p.payment_status, provider_name: p.provider_name, date: null, created_at: p.created_at });
+      }
+    }
+
+    // 3. Blood requests
+    if (!type || type === 'blood') {
+      let brWhere = ['br.user_id = ?'];
+      let brParams = [userId];
+      if (status) { brWhere.push('br.status = ?'); brParams.push(status); }
+
+      const [brRows] = await pool.query(
+        `SELECT br.request_id as id, br.status, br.total_amount as amount, br.payment_status, br.required_date, br.created_at, bb.name as provider_name FROM blood_requests br JOIN blood_banks bb ON br.blood_bank_id = bb.id WHERE ${brWhere.join(' AND ')} ORDER BY br.created_at DESC`,
+        brParams
+      );
+      for (const br of brRows) {
+        allBookings.push({ id: br.id, type: 'blood', status: br.status, amount: br.amount, payment_status: br.payment_status, provider_name: br.provider_name, date: br.required_date, created_at: br.created_at });
+      }
+    }
+
+    // Sort all by created_at desc
+    allBookings.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    // Paginate
+    const total = allBookings.length;
+    const paginated = allBookings.slice(offset, offset + parseInt(limit));
+
+    return res.status(200).json({
+      message: 'All bookings fetched.',
+      data: paginated,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, total_pages: Math.ceil(total / parseInt(limit)) },
+    });
+  } catch (error) {
+    console.error('getAllBookings error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   createDoctorBooking,
   createLabBooking,
@@ -1026,4 +1137,5 @@ module.exports = {
   getBookingDetail,
   getAppointments,
   getAppointmentDetail,
+  getAllBookings,
 };

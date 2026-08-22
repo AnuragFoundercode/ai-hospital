@@ -162,9 +162,11 @@ const updateOrderStatus = async (req, res) => {
 
           // Notify nearby delivery partners
           const { sendToClient } = require('../../events/sse');
+          const [radiusConfig] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'delivery_search_radius_km'");
+          const searchRadius = radiusConfig.length ? parseFloat(radiusConfig[0].config_value) : 5;
           const [nearbyPartners] = await pool.query(
-            "SELECT id, fcm_token FROM delivery_partners WHERE is_online = 1 AND is_active = 1 AND verification_status = 'approved' AND latitude IS NOT NULL AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= 5",
-            [pickupLat, pickupLng, pickupLat]
+            "SELECT id, fcm_token FROM delivery_partners WHERE is_online = 1 AND is_active = 1 AND verification_status = 'approved' AND latitude IS NOT NULL AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?",
+            [pickupLat, pickupLng, pickupLat, searchRadius]
           );
 
           for (const dp of nearbyPartners) {

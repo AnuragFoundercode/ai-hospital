@@ -386,8 +386,8 @@ const getServiceSlots = async (req, res) => {
     const allSlots = [];
     let current = startMinutes;
 
-    // If booking for today, skip past time slots
-    const now = new Date();
+    // If booking for today, skip past time slots (IST timezone)
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const isToday = date === todayStr;
     const currentTimeMinutes = isToday ? (now.getHours() * 60 + now.getMinutes()) : 0;

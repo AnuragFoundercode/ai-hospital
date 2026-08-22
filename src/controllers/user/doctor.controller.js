@@ -172,19 +172,37 @@ const getDoctorSlots = async (req, res) => {
     // Get slots
     const slots = await doctorModel.getSlotsByDate(doctor.id, date);
 
+    // Filter out past slots if today (IST)
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const isToday = date === todayStr;
+    console.log(`[SLOT DEBUG] date=${date}, todayStr=${todayStr}, isToday=${isToday}, hours=${now.getHours()}, mins=${now.getMinutes()}`);
+
+    let filteredSlots = slots;
+    if (isToday) {
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      filteredSlots = slots.filter((s) => {
+        const timeStr = s.time || s.start_time;
+        if (!timeStr) return true;
+        const parts = timeStr.split(':');
+        const slotMinutes = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        return slotMinutes > currentMinutes;
+      });
+    }
+
     // Separate available & booked
-    const available_slots = slots.filter((s) => !s.is_booked);
-    const booked_slots = slots.filter((s) => s.is_booked);
+    const available_slots = filteredSlots.filter((s) => !s.is_booked);
+    const booked_slots = filteredSlots.filter((s) => s.is_booked);
 
     return res.status(200).json({      message: 'Slots fetched.',
       data: {
         doctor_id: doctor.uuid,
         doctor_name: doctor.full_name,
         date,
-        total_slots: slots.length,
+        total_slots: filteredSlots.length,
         available_count: available_slots.length,
         booked_count: booked_slots.length,
-        slots,
+        slots: filteredSlots,
       },
     });
   } catch (error) {

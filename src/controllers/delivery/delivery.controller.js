@@ -54,6 +54,7 @@ const verifyOtp = async (req, res) => {
       message: is_new_user ? 'OTP verified. Complete your profile.' : 'Login successful.',
       data: {
         token,
+        role: 'delivery',
         is_new_user,
         registration_step: partner.registration_step || 0,
         verification_status: partner.verification_status,

@@ -376,11 +376,13 @@ const addPharmacyReview = async (req, res) => {
  */
 const searchMedicines = async (req, res) => {
   try {
-    const { search, pincode } = req.query;
+    const { search, pincode, category_id } = req.query;
     if (!search || search.trim().length < 2) return res.status(400).json({ message: 'search (min 2 chars) required.' });
 
     let zoneFilter = '';
     let zoneParams = [];
+    let categoryFilter = '';
+    let categoryParams = [];
 
     // If pincode provided, find zone and filter pharmacies by same zone
     if (pincode) {
@@ -391,16 +393,21 @@ const searchMedicines = async (req, res) => {
       }
     }
 
+    if (category_id) {
+      categoryFilter = 'AND pm.category_id = ?';
+      categoryParams = [parseInt(category_id)];
+    }
+
     const [rows] = await pool.query(
       `SELECT pm.id as medicine_id, pm.name, pm.generic_name, pm.mrp, pm.selling_price, pm.medicine_image_url, pm.prescription_required, mc.name as category_name,
               p.uuid as pharmacy_uuid, p.name as pharmacy_name, p.profile_photo as pharmacy_photo, p.pincode as pharmacy_pincode, p.delivery_charge, p.free_delivery_above
        FROM pharmacy_medicines pm
        JOIN pharmacies p ON pm.pharmacy_id = p.id
        LEFT JOIN medicine_categories mc ON pm.category_id = mc.id
-       WHERE pm.name LIKE ? AND pm.is_active = 1 AND pm.quantity > 0 AND p.is_active = 1 AND p.is_verified = 1 ${zoneFilter}
+       WHERE pm.name LIKE ? AND pm.is_active = 1 AND pm.quantity > 0 AND p.is_active = 1 AND p.is_verified = 1 ${zoneFilter} ${categoryFilter}
        ORDER BY pm.selling_price ASC
        LIMIT 50`,
-      [`%${search}%`, ...zoneParams]
+      [`%${search}%`, ...zoneParams, ...categoryParams]
     );
 
     // Group by medicine name
@@ -439,4 +446,46 @@ const searchMedicines = async (req, res) => {
   }
 };
 
-module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview, searchMedicines };
+/**
+ * GET /api/v1/user/browse-medicines?pincode=226001&category_id=1&search=&page=&limit=
+ * Browse all medicines in a zone (no pharmacy id needed)
+ */
+const browseMedicines = async (req, res) => {
+  try {
+    const { pincode, category_id, search, page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let where = ['pm.is_active = 1', 'pm.quantity > 0', 'p.is_active = 1', 'p.is_verified = 1'];
+    let params = [];
+
+    // Zone filter
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) { where.push('p.zone_id = ?'); params.push(zoneRows[0].id); }
+      else { return res.status(200).json({ message: 'No medicines available in this pincode.', data: [], pagination: { page: parseInt(page), limit: parseInt(limit), total: 0, total_pages: 0 } }); }
+    }
+
+    if (category_id) { where.push('pm.category_id = ?'); params.push(parseInt(category_id)); }
+    if (search) { where.push('pm.name LIKE ?'); params.push(`%${search}%`); }
+
+    const whereClause = where.join(' AND ');
+    const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM pharmacy_medicines pm JOIN pharmacies p ON pm.pharmacy_id = p.id WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT pm.id, pm.name, pm.generic_name, pm.mrp, pm.selling_price, pm.medicine_image_url, pm.prescription_required, mc.name as category_name, p.uuid as pharmacy_uuid, p.name as pharmacy_name
+       FROM pharmacy_medicines pm
+       JOIN pharmacies p ON pm.pharmacy_id = p.id
+       LEFT JOIN medicine_categories mc ON pm.category_id = mc.id
+       WHERE ${whereClause}
+       ORDER BY pm.name ASC LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    return res.status(200).json({
+      message: 'Medicines fetched.',
+      data: rows.map(m => ({ id: m.id, name: m.name, generic_name: m.generic_name, category: m.category_name, mrp: m.mrp, selling_price: m.selling_price, image: m.medicine_image_url, prescription_required: m.prescription_required, pharmacy: { id: m.pharmacy_uuid, name: m.pharmacy_name } })),
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) },
+    });
+  } catch (error) { console.error('browseMedicines error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview, searchMedicines, browseMedicines };

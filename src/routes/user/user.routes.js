@@ -93,6 +93,7 @@ router.get('/medicine/:id', userAuth, pharmacyController.getMedicineDetail);
 router.get('/medicine/:id/reviews', userAuth, pharmacyController.getMedicineReviews);
 router.post('/medicine/:id/review', userAuth, pharmacyController.addMedicineReview);
 router.get('/search-medicines', userAuth, pharmacyController.searchMedicines);
+router.get('/browse-medicines', userAuth, pharmacyController.browseMedicines);
 router.post('/pharmacy-cart/add', userAuth, pharmacyController.addToCart);
 router.get('/pharmacy-cart', userAuth, pharmacyController.getCart);
 router.delete('/pharmacy-cart/clear', userAuth, pharmacyController.clearCart);

@@ -43,6 +43,10 @@ router.use('/pharmacy', pharmacyRoutes);
 const deliveryRoutes = require('./delivery/delivery.routes');
 router.use('/delivery', deliveryRoutes);
 
+// Sample Collector panel
+const collectorRoutes = require('./collector/collector.routes');
+router.use('/collector', collectorRoutes);
+
 // Admin panel
 router.use('/admin', adminRoutes);
 
