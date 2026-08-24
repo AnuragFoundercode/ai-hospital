@@ -128,6 +128,55 @@ const acceptBooking = async (req, res) => {
       [booking.user_id, `Your lab test booking has been accepted by ${metadata.lab_name || 'Lab'}.`, booking.id, user?.fcm_token ? 'push' : 'sms']
     );
 
+    // If home collection → create sample_collection_request for nearby collectors
+    if (metadata.collection_type === 'home') {
+      try {
+        const [labRows] = await pool.query('SELECT latitude, longitude, address_line1, city FROM pathology_labs WHERE id = ?', [labId]);
+        const userAddress = metadata.address_id ? (await pool.query('SELECT * FROM user_addresses WHERE id = ?', [metadata.address_id]))[0][0] : null;
+
+        const pickupLat = userAddress ? parseFloat(userAddress.latitude) : (booking.pickup_latitude ? parseFloat(booking.pickup_latitude) : null);
+        const pickupLng = userAddress ? parseFloat(userAddress.longitude) : (booking.pickup_longitude ? parseFloat(booking.pickup_longitude) : null);
+        const labLat = labRows[0] ? parseFloat(labRows[0].latitude) : null;
+        const labLng = labRows[0] ? parseFloat(labRows[0].longitude) : null;
+
+        if (pickupLat && pickupLng && labLat && labLng) {
+          // Haversine distance
+          const R = 6371;
+          const dLat = (labLat - pickupLat) * Math.PI / 180;
+          const dLon = (labLng - pickupLng) * Math.PI / 180;
+          const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pickupLat*Math.PI/180)*Math.cos(labLat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+          const distanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+          const [configRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'sample_collection_per_km_charge'");
+          const perKmCharge = configRows.length ? parseFloat(configRows[0].config_value) : 15;
+          const collectionEarning = parseFloat((distanceKm * perKmCharge).toFixed(2));
+          const requestId = `SCR-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+          const pickupAddress = userAddress ? `${userAddress.address_line1}, ${userAddress.city}` : 'User address';
+          const labAddress = `${labRows[0].address_line1}, ${labRows[0].city}`;
+
+          await pool.query(
+            "INSERT INTO sample_collection_requests (request_id, booking_id, lab_id, pickup_address, pickup_latitude, pickup_longitude, lab_address, lab_latitude, lab_longitude, distance_km, per_km_charge, collection_earning, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching')",
+            [requestId, booking.id, labId, pickupAddress, pickupLat, pickupLng, labAddress, labLat, labLng, distanceKm.toFixed(2), perKmCharge, collectionEarning]
+          );
+
+          // Notify nearby collectors via SSE
+          const { sendToClient } = require('../../events/sse');
+          const [radiusConfig] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'sample_collection_search_radius_km'");
+          const searchRadius = radiusConfig.length ? parseFloat(radiusConfig[0].config_value) : 10;
+          const [nearbyCollectors] = await pool.query(
+            "SELECT id, fcm_token FROM sample_collectors WHERE is_online = 1 AND is_active = 1 AND verification_status = 'approved' AND latitude IS NOT NULL AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?",
+            [pickupLat, pickupLng, pickupLat, searchRadius]
+          );
+
+          for (const sc of nearbyCollectors) {
+            sendToClient(`collector_${sc.id}`, 'new_collection_request', { request_id: requestId, pickup_address: pickupAddress, distance_km: distanceKm.toFixed(2), earning: collectionEarning });
+            if (sc.fcm_token) await notificationService.sendToDevice(sc.fcm_token, 'New Sample Collection 🧪', `₹${collectionEarning} | ${distanceKm.toFixed(1)} km`, { type: 'new_collection', request_id: requestId });
+          }
+        }
+      } catch (collErr) { console.error('Sample collection request error:', collErr.message); }
+    }
+
     return res.status(200).json({      message: 'Booking accepted. User notified.',
       data: { booking_id, status: 'assigned' },
     });

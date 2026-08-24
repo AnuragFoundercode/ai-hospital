@@ -47,6 +47,10 @@ router.use('/delivery', deliveryRoutes);
 const collectorRoutes = require('./collector/collector.routes');
 router.use('/collector', collectorRoutes);
 
+// Unified Partner Auth (single APK login)
+const partnerAuthRoutes = require('./partner-auth/partner-auth.routes');
+router.use('/partner-auth', partnerAuthRoutes);
+
 // Admin panel
 router.use('/admin', adminRoutes);
 

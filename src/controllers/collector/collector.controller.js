@@ -114,23 +114,32 @@ const getRequests = async (req, res) => {
     const [configRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'sample_collection_search_radius_km'");
     const radiusKm = configRows.length ? parseFloat(configRows[0].config_value) : 10;
     const [rows] = await pool.query(
-      `SELECT scr.*, pl.name as lab_name FROM sample_collection_requests scr JOIN pathology_labs pl ON scr.lab_id = pl.id WHERE scr.status = 'searching' AND (6371 * acos(cos(radians(?)) * cos(radians(pickup_latitude)) * cos(radians(pickup_longitude) - radians(?)) + sin(radians(?)) * sin(radians(pickup_latitude)))) <= ? ORDER BY scr.created_at DESC`,
+      `SELECT scr.*, pl.name as lab_name, b.booking_id as booking_number, b.metadata, u.full_name as patient_name, u.mobile as patient_mobile, u.gender as patient_gender, u.date_of_birth as patient_dob
+       FROM sample_collection_requests scr
+       JOIN pathology_labs pl ON scr.lab_id = pl.id
+       JOIN bookings b ON scr.booking_id = b.id
+       JOIN users u ON b.user_id = u.id
+       WHERE scr.status = 'searching' AND (6371 * acos(cos(radians(?)) * cos(radians(scr.pickup_latitude)) * cos(radians(scr.pickup_longitude) - radians(?)) + sin(radians(?)) * sin(radians(scr.pickup_latitude)))) <= ? ORDER BY scr.created_at DESC`,
       [collector[0].latitude, collector[0].longitude, collector[0].latitude, radiusKm]
     );
-    return res.status(200).json({ message: 'Requests fetched.', data: rows.map(r => ({ id: r.id, request_id: r.request_id, lab_name: r.lab_name, pickup: { address: r.pickup_address, lat: r.pickup_latitude, lng: r.pickup_longitude }, lab: { address: r.lab_address, lat: r.lab_latitude, lng: r.lab_longitude }, distance_km: r.distance_km, collection_earning: r.collection_earning, created_at: r.created_at })) });
+    return res.status(200).json({ message: 'Requests fetched.', data: rows.map(r => {
+      const metadata = r.metadata ? (typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata) : {};
+      return { id: r.id, request_id: r.request_id, lab_name: r.lab_name, patient: { name: r.patient_name, mobile: r.patient_mobile, gender: r.patient_gender, dob: r.patient_dob }, tests: metadata.tests || [], pickup: { address: r.pickup_address, lat: r.pickup_latitude, lng: r.pickup_longitude }, lab: { address: r.lab_address, lat: r.lab_latitude, lng: r.lab_longitude }, distance_km: r.distance_km, collection_earning: r.collection_earning, created_at: r.created_at };
+    }) });
   } catch (error) { console.error('collector getRequests error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
 const getActiveCollection = async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT scr.*, pl.name as lab_name, pl.mobile as lab_mobile, b.booking_id as booking_number, u.full_name as patient_name, u.mobile as patient_mobile
+      `SELECT scr.*, pl.name as lab_name, pl.mobile as lab_mobile, b.booking_id as booking_number, b.metadata, u.full_name as patient_name, u.mobile as patient_mobile, u.gender as patient_gender, u.date_of_birth as patient_dob
        FROM sample_collection_requests scr JOIN pathology_labs pl ON scr.lab_id = pl.id JOIN bookings b ON scr.booking_id = b.id JOIN users u ON b.user_id = u.id
        WHERE scr.collector_id = ? AND scr.status IN ('assigned', 'reached_patient', 'sample_collected') ORDER BY scr.assigned_at DESC LIMIT 1`, [req.collector.id]
     );
     if (!rows.length) return res.status(200).json({ message: 'No active collection.', data: null });
     const r = rows[0];
-    return res.status(200).json({ message: 'Active collection fetched.', data: { id: r.id, request_id: r.request_id, status: r.status, pickup: { address: r.pickup_address, lat: r.pickup_latitude, lng: r.pickup_longitude, patient_name: r.patient_name, patient_mobile: r.patient_mobile }, lab: { name: r.lab_name, mobile: r.lab_mobile, address: r.lab_address, lat: r.lab_latitude, lng: r.lab_longitude }, booking_id: r.booking_number, distance_km: r.distance_km, collection_earning: r.collection_earning, collection_otp: r.collection_otp, assigned_at: r.assigned_at } });
+    const metadata = r.metadata ? (typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata) : {};
+    return res.status(200).json({ message: 'Active collection fetched.', data: { id: r.id, request_id: r.request_id, status: r.status, patient: { name: r.patient_name, mobile: r.patient_mobile, gender: r.patient_gender, dob: r.patient_dob }, tests: metadata.tests || [], pickup: { address: r.pickup_address, lat: r.pickup_latitude, lng: r.pickup_longitude }, lab: { name: r.lab_name, mobile: r.lab_mobile, address: r.lab_address, lat: r.lab_latitude, lng: r.lab_longitude }, booking_id: r.booking_number, distance_km: r.distance_km, collection_earning: r.collection_earning, collection_otp: r.collection_otp, assigned_at: r.assigned_at } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
