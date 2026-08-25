@@ -236,7 +236,7 @@ const getLabBookings = async (req, res) => {
     const whereClause = where.join(' AND ');
     const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM bookings b WHERE ${whereClause}`, params);
     const [rows] = await pool.query(
-      `SELECT b.booking_id, b.status, b.booking_date, b.base_amount, b.discount_amount, b.final_amount, b.payment_status, b.payment_method, b.metadata, b.user_rating, b.created_at,
+      `SELECT b.id, b.booking_id, b.status, b.booking_date, b.base_amount, b.discount_amount, b.final_amount, b.payment_status, b.payment_method, b.metadata, b.user_rating, b.created_at,
               pl.uuid as lab_uuid, pl.name as lab_name, pl.profile_photo as lab_photo
        FROM bookings b
        JOIN pathology_labs pl ON b.provider_id = pl.id
@@ -245,6 +245,18 @@ const getLabBookings = async (req, res) => {
       [...params, parseInt(limit), offset]
     );
 
+    // Get collection statuses for home bookings
+    const bookingIds = rows.map(r => r.id);
+    let collectionMap = {};
+    if (bookingIds.length) {
+      const placeholders = bookingIds.map(() => '?').join(',');
+      const [scrRows] = await pool.query(
+        `SELECT booking_id, status FROM sample_collection_requests WHERE booking_id IN (${placeholders})`,
+        bookingIds
+      );
+      for (const scr of scrRows) { collectionMap[scr.booking_id] = scr.status; }
+    }
+
     return res.status(200).json({
       message: 'Lab bookings fetched.',
       data: rows.map(b => {
@@ -252,6 +264,7 @@ const getLabBookings = async (req, res) => {
         return {
           booking_id: b.booking_id,
           status: b.status,
+          collection_status: metadata.collection_type === 'home' ? (collectionMap[b.id] || 'pending') : null,
           booking_date: b.booking_date,
           lab: { id: b.lab_uuid, name: b.lab_name, photo: b.lab_photo },
           tests: metadata.tests || [],
@@ -289,6 +302,29 @@ const getLabBookingDetail = async (req, res) => {
     const b = rows[0];
     const metadata = b.metadata ? (typeof b.metadata === 'string' ? JSON.parse(b.metadata) : b.metadata) : {};
 
+    // Get sample collection status if home collection
+    let sampleCollection = null;
+    if (metadata.collection_type === 'home') {
+      const [scrRows] = await pool.query(
+        `SELECT scr.request_id, scr.status, scr.collection_otp, scr.distance_km, scr.collection_earning, scr.assigned_at, scr.reached_at, scr.collected_at, scr.delivered_at, sc.full_name as collector_name, sc.mobile as collector_mobile
+         FROM sample_collection_requests scr
+         LEFT JOIN sample_collectors sc ON scr.collector_id = sc.id
+         WHERE scr.booking_id = ?
+         ORDER BY scr.created_at DESC LIMIT 1`,
+        [b.id]
+      );
+      if (scrRows.length) {
+        const scr = scrRows[0];
+        sampleCollection = {
+          request_id: scr.request_id,
+          status: scr.status,
+          collection_otp: scr.collection_otp,
+          collector: scr.collector_name ? { name: scr.collector_name, mobile: scr.collector_mobile } : null,
+          timeline: { assigned_at: scr.assigned_at, reached_at: scr.reached_at, collected_at: scr.collected_at, delivered_at: scr.delivered_at },
+        };
+      }
+    }
+
     return res.status(200).json({
       message: 'Lab booking detail fetched.',
       data: {
@@ -299,6 +335,7 @@ const getLabBookingDetail = async (req, res) => {
         lab: { id: b.lab_uuid, name: b.lab_name, photo: b.lab_photo, mobile: b.lab_mobile, address: b.lab_address, city: b.lab_city },
         tests: metadata.tests || [],
         collection_type: metadata.collection_type || null,
+        sample_collection: sampleCollection,
         attachments: metadata.attachments || [],
         amount: { base: b.base_amount, discount: b.discount_amount, tax: b.tax_amount, total: b.final_amount },
         payment: { method: b.payment_method, status: b.payment_status, transaction_id: b.transaction_id, paid_at: b.paid_at },

@@ -27,6 +27,7 @@ router.get('/requests', deliveryAuth, deliveryController.getDeliveryRequests);
 router.put('/request/:id/accept', deliveryAuth, deliveryController.acceptDelivery);
 router.put('/request/:id/reject', deliveryAuth, deliveryController.rejectDelivery);
 router.put('/request/:id/picked-up', deliveryAuth, deliveryController.markPickedUp);
+router.put('/request/:id/reached', deliveryAuth, deliveryController.markReached);
 router.put('/request/:id/delivered', deliveryAuth, deliveryController.markDelivered);
 
 // History & Earnings

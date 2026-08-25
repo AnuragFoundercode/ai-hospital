@@ -1,0 +1,1 @@
+ALTER TABLE pharmacy_orders MODIFY COLUMN status ENUM('pending', 'accepted', 'prescription_pending', 'packing', 'ready', 'out_for_delivery', 'reached', 'delivered', 'cancelled', 'rejected') DEFAULT 'pending';

@@ -1,0 +1,1 @@
+ALTER TABLE bookings MODIFY COLUMN status ENUM('pending', 'confirmed', 'assigned', 'collector_assigned', 'collector_reached', 'sample_collected', 'in_progress', 'completed', 'cancelled', 'failed') NOT NULL DEFAULT 'pending';

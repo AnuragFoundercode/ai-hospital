@@ -148,6 +148,7 @@ const acceptRequest = async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM sample_collection_requests WHERE id = ? AND status = 'searching'", [req.params.id]);
     if (!rows.length) return res.status(404).json({ message: 'Request not found or already assigned.' });
     await pool.query("UPDATE sample_collection_requests SET collector_id = ?, status = 'assigned', assigned_at = NOW() WHERE id = ?", [req.collector.id, req.params.id]);
+    await pool.query("UPDATE bookings SET status = 'collector_assigned' WHERE id = ?", [rows[0].booking_id]);
     return res.status(200).json({ message: 'Collection accepted!', data: { status: 'assigned' } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -164,6 +165,7 @@ const markReachedPatient = async (req, res) => {
     if (rows[0].status !== 'assigned') return res.status(400).json({ message: `Cannot. Current: ${rows[0].status}` });
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     await pool.query("UPDATE sample_collection_requests SET status = 'reached_patient', reached_at = NOW(), collection_otp = ? WHERE id = ?", [otp, rows[0].id]);
+    await pool.query("UPDATE bookings SET status = 'collector_reached' WHERE id = ?", [rows[0].booking_id]);
     // Notify user
     const [bookingRows] = await pool.query('SELECT user_id FROM bookings WHERE id = ?', [rows[0].booking_id]);
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [bookingRows[0].user_id]);
@@ -181,6 +183,7 @@ const markSampleCollected = async (req, res) => {
     if (rows[0].status !== 'reached_patient') return res.status(400).json({ message: `Cannot. Current: ${rows[0].status}` });
     if (rows[0].collection_otp !== otp) return res.status(400).json({ message: 'Invalid OTP.' });
     await pool.query("UPDATE sample_collection_requests SET status = 'sample_collected', collected_at = NOW() WHERE id = ?", [rows[0].id]);
+    await pool.query("UPDATE bookings SET status = 'sample_collected' WHERE id = ?", [rows[0].booking_id]);
     return res.status(200).json({ message: 'Sample collected!', data: { status: 'sample_collected' } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };

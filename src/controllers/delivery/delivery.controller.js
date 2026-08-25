@@ -252,7 +252,7 @@ const getActiveDelivery = async (req, res) => {
        JOIN pharmacies p ON dr.pharmacy_id = p.id
        JOIN pharmacy_orders po ON dr.order_id = po.id
        JOIN users u ON po.user_id = u.id
-       WHERE dr.partner_id = ? AND dr.status IN ('assigned', 'picked_up')
+       WHERE dr.partner_id = ? AND dr.status IN ('assigned', 'picked_up', 'reached')
        ORDER BY dr.assigned_at DESC LIMIT 1`,
       [partnerId]
     );
@@ -387,20 +387,46 @@ const markPickedUp = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: 'Delivery not found.' });
     if (rows[0].status !== 'assigned') return res.status(400).json({ message: `Cannot mark picked up. Current: ${rows[0].status}` });
 
-    // Generate 4-digit OTP for delivery verification
-    const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
-
-    await pool.query("UPDATE delivery_requests SET status = 'picked_up', picked_up_at = NOW(), delivery_otp = ? WHERE id = ?", [deliveryOtp, rows[0].id]);
+    await pool.query("UPDATE delivery_requests SET status = 'picked_up', picked_up_at = NOW() WHERE id = ?", [rows[0].id]);
     await pool.query("UPDATE pharmacy_orders SET status = 'out_for_delivery', dispatched_at = NOW() WHERE id = ?", [rows[0].order_id]);
+
+    // Notify user
+    const [orderRows] = await pool.query('SELECT user_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
+    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [orderRows[0].user_id]);
+    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Order Picked Up 🛵', 'Your medicine order is on its way!', { type: 'delivery_picked_up' });
+
+    return res.status(200).json({ message: 'Marked as picked up.', data: { status: 'picked_up' } });
+  } catch (error) {
+    console.error('delivery pickedUp error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * PUT /api/v1/delivery/request/:id/reached
+ * Delivery partner reached at user's location — OTP generated
+ */
+const markReached = async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT id, order_id, status FROM delivery_requests WHERE id = ? AND partner_id = ?", [req.params.id, req.delivery.id]);
+    if (!rows.length) return res.status(404).json({ message: 'Delivery not found.' });
+    if (rows[0].status !== 'picked_up') return res.status(400).json({ message: `Cannot mark reached. Current: ${rows[0].status}` });
+
+    // Generate OTP
+    const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    await pool.query("UPDATE delivery_requests SET status = 'reached', reached_at = NOW(), delivery_otp = ? WHERE id = ?", [deliveryOtp, rows[0].id]);
+
+    // Update pharmacy order status to 'reached'
+    await pool.query("UPDATE pharmacy_orders SET status = 'reached' WHERE id = ?", [rows[0].order_id]);
 
     // Notify user with OTP
     const [orderRows] = await pool.query('SELECT user_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [orderRows[0].user_id]);
-    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Order Picked Up 🛵', `Your order is on its way! Delivery OTP: ${deliveryOtp}`, { type: 'delivery_picked_up', delivery_otp: deliveryOtp });
+    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Delivery Partner Arrived 🏠', `Your order has arrived! Delivery OTP: ${deliveryOtp}`, { type: 'delivery_reached', delivery_otp: deliveryOtp });
 
-    return res.status(200).json({ message: 'Marked as picked up. OTP sent to user.', data: { status: 'picked_up' } });
+    return res.status(200).json({ message: 'Marked as reached. OTP sent to user.', data: { status: 'reached' } });
   } catch (error) {
-    console.error('delivery pickedUp error:', error.message);
+    console.error('delivery markReached error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
@@ -416,7 +442,7 @@ const markDelivered = async (req, res) => {
 
     const [rows] = await pool.query("SELECT dr.*, po.pharmacy_id, po.user_id, po.final_amount, po.payment_method FROM delivery_requests dr JOIN pharmacy_orders po ON dr.order_id = po.id WHERE dr.id = ? AND dr.partner_id = ?", [req.params.id, req.delivery.id]);
     if (!rows.length) return res.status(404).json({ message: 'Delivery not found.' });
-    if (rows[0].status !== 'picked_up') return res.status(400).json({ message: `Cannot mark delivered. Current: ${rows[0].status}` });
+    if (rows[0].status !== 'reached') return res.status(400).json({ message: `Cannot mark delivered. Current: ${rows[0].status}` });
 
     // Verify OTP
     if (rows[0].delivery_otp !== otp) return res.status(400).json({ message: 'Invalid OTP.' });
@@ -513,4 +539,4 @@ const getEarnings = async (req, res) => {
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
-module.exports = { sendOtp, verifyOtp, step1Personal, step2Vehicle, step3Documents, step4Bank, getProfile, getVehicleTypes, toggleOnline, updateLocation, getActiveDelivery, getDeliveryRequests, acceptDelivery, rejectDelivery, markPickedUp, markDelivered, getDeliveryHistory, getEarnings };
+module.exports = { sendOtp, verifyOtp, step1Personal, step2Vehicle, step3Documents, step4Bank, getProfile, getVehicleTypes, toggleOnline, updateLocation, getActiveDelivery, getDeliveryRequests, acceptDelivery, rejectDelivery, markPickedUp, markReached, markDelivered, getDeliveryHistory, getEarnings };

@@ -176,7 +176,6 @@ const getDoctorSlots = async (req, res) => {
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const isToday = date === todayStr;
-    console.log(`[SLOT DEBUG] date=${date}, todayStr=${todayStr}, isToday=${isToday}, hours=${now.getHours()}, mins=${now.getMinutes()}`);
 
     let filteredSlots = slots;
     if (isToday) {

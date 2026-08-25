@@ -84,60 +84,95 @@ const getBookingDetail = async (req, res) => {
     const b = rows[0];
     const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
 
+    // Get user address if available
+    let userAddress = null;
+    if (b.delivery_address_id) {
+      const [addrRows] = await pool.query('SELECT * FROM user_addresses WHERE id = ?', [b.delivery_address_id]);
+      if (addrRows.length) userAddress = { name: addrRows[0].name, mobile: addrRows[0].mobile, address: addrRows[0].address_line1, address_line2: addrRows[0].address_line2, landmark: addrRows[0].landmark, city: addrRows[0].city, state: addrRows[0].state, pincode: addrRows[0].pincode };
+    }
+
     // Timeline
     const [timeline] = await pool.query(
       'SELECT from_status, to_status, changed_by_type, remarks, created_at FROM booking_status_history WHERE booking_id = ? ORDER BY created_at ASC',
       [b.id]
     );
 
-    return res.status(200).json({
-      message: 'Booking detail fetched.',
-      data: {
-        booking_id: b.booking_id,
-        status: b.status,
-        patient: {
-          name: metadata.patient?.name || b.user_name,
-          mobile: metadata.patient?.mobile || b.user_mobile,
-          email: metadata.patient?.email || b.user_email,
-          age: metadata.patient?.age,
-          gender: metadata.patient?.gender || b.user_gender,
-          profile_photo: b.user_photo,
-        },
-        scan_details: {
-          service_name: metadata.service_name,
-          center_name: metadata.center_name,
-          booking_type: metadata.booking_type,
-          date: b.booking_date,
-          slot_time: b.slot_start_time,
-          slot_end_time: b.slot_end_time,
-          duration_minutes: b.slot_start_time && b.slot_end_time ? ((parseInt(b.slot_end_time.split(':')[0]) * 60 + parseInt(b.slot_end_time.split(':')[1])) - (parseInt(b.slot_start_time.split(':')[0]) * 60 + parseInt(b.slot_start_time.split(':')[1]))) : null,
-        },
-        prescription: metadata.prescription || null,
-        remark: b.user_notes,
-        reports: metadata.reports || [],
-        report_notes: metadata.report_notes || null,
-        payment: {
-          status: b.payment_status,
-          method: b.payment_method,
-          amount: b.final_amount,
-          transaction_id: b.transaction_id,
-        },
-        timeline: timeline.map((t) => ({
-          from: t.from_status,
-          to: t.to_status,
-          by: t.changed_by_type,
-          remarks: t.remarks,
-          at: t.created_at,
-        })),
-        timestamps: {
-          created_at: b.created_at,
-          confirmed_at: b.confirmed_at,
-          started_at: b.started_at,
-          completed_at: b.completed_at,
-          cancelled_at: b.cancelled_at,
-        },
+    // Get service details from pricing table
+    let serviceDetail = null;
+    if (metadata.service_pricing_id) {
+      const [svcRows] = await pool.query(
+        `SELECT dsp.price, dsp.discount_percent, dsp.duration_minutes, dsp.booking_type, ds.name as service_name, ds.description, ds.is_fasting_required, ds.is_contrast_required, ds.report_delivery_hours, ds.patient_instructions, dc.name as category_name
+         FROM diagnostic_service_pricing dsp
+         JOIN diagnostic_services ds ON dsp.service_id = ds.id
+         LEFT JOIN diagnostic_categories dc ON ds.category_id = dc.id
+         WHERE dsp.id = ?`,
+        [metadata.service_pricing_id]
+      );
+      if (svcRows.length) serviceDetail = svcRows[0];
+    }
+
+    // Build clean response
+    const data = {
+      booking_id: b.booking_id,
+      status: b.status,
+      booking_date: b.booking_date,
+      patient: {
+        name: metadata.patient?.name || b.user_name,
+        mobile: metadata.patient?.mobile || b.user_mobile,
+        email: metadata.patient?.email || b.user_email,
+        age: metadata.patient?.age || null,
+        gender: metadata.patient?.gender || b.user_gender,
+        dob: b.user_dob,
+        profile_photo: b.user_photo,
       },
-    });
+      service: {
+        service_pricing_id: metadata.service_pricing_id,
+        service_name: serviceDetail?.service_name || metadata.service_name,
+        category: serviceDetail?.category_name || null,
+        booking_type: serviceDetail?.booking_type || metadata.booking_type,
+        duration_minutes: serviceDetail?.duration_minutes || null,
+        is_fasting_required: serviceDetail?.is_fasting_required || 0,
+        is_contrast_required: serviceDetail?.is_contrast_required || 0,
+        report_delivery_hours: serviceDetail?.report_delivery_hours || null,
+        patient_instructions: serviceDetail?.patient_instructions || null,
+      },
+      schedule: {
+        date: b.booking_date,
+        slot_start_time: b.slot_start_time,
+        slot_end_time: b.slot_end_time,
+      },
+      pricing: {
+        base_amount: b.base_amount,
+        discount_amount: b.discount_amount,
+        tax_amount: b.tax_amount,
+        final_amount: b.final_amount,
+      },
+      payment: {
+        status: b.payment_status,
+        method: b.payment_method,
+        transaction_id: b.transaction_id,
+        paid_at: b.paid_at,
+      },
+      timestamps: {
+        created_at: b.created_at,
+        confirmed_at: b.confirmed_at,
+        started_at: b.started_at,
+        completed_at: b.completed_at,
+        cancelled_at: b.cancelled_at,
+      },
+    };
+
+    // Add optional fields only if they have data
+    if (userAddress) data.address = userAddress;
+    if (metadata.prescription) data.prescription = metadata.prescription;
+    if (b.user_notes) data.remark = b.user_notes;
+    if (b.provider_notes) data.provider_notes = b.provider_notes;
+    if (metadata.reports && metadata.reports.length) data.reports = metadata.reports;
+    if (b.user_rating) data.rating = { user_rating: b.user_rating, user_review: b.user_review, rated_at: b.rated_at };
+    if (b.cancellation_reason) data.cancellation_reason = b.cancellation_reason;
+    if (timeline.length) data.timeline = timeline.map((t) => ({ from: t.from_status, to: t.to_status, by: t.changed_by_type, remarks: t.remarks, at: t.created_at }));
+
+    return res.status(200).json({ message: 'Booking detail fetched.', data });
   } catch (error) {
     console.error('diagnostic getBookingDetail error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });

@@ -180,10 +180,66 @@ const removeService = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/diagnostic/services/:id
+ * Service detail by pricing id
+ */
+const getServiceDetail = async (req, res) => {
+  try {
+    const centerId = req.diagnostic.id;
+    const { id } = req.params;
+
+    const [rows] = await pool.query(
+      `SELECT dsp.*, ds.name, ds.description, ds.preparation_instructions, ds.is_fasting_required, ds.is_contrast_required, ds.report_delivery_hours, ds.patient_instructions, dc.name as category_name
+       FROM diagnostic_service_pricing dsp
+       JOIN diagnostic_services ds ON dsp.service_id = ds.id
+       LEFT JOIN diagnostic_categories dc ON ds.category_id = dc.id
+       WHERE dsp.id = ? AND dsp.diagnostic_center_id = ?`,
+      [id, centerId]
+    );
+
+    if (!rows.length) return res.status(404).json({ message: 'Service not found.' });
+    const r = rows[0];
+
+    return res.status(200).json({
+      message: 'Service detail fetched.',
+      data: {
+        id: r.id,
+        service_id: r.service_id,
+        name: r.name,
+        category: r.category_name,
+        description: r.description,
+        preparation_instructions: r.preparation_instructions,
+        is_fasting_required: r.is_fasting_required,
+        is_contrast_required: r.is_contrast_required,
+        report_delivery_hours: r.report_delivery_hours,
+        patient_instructions: r.patient_instructions,
+        price: r.price,
+        discount_percent: r.discount_percent,
+        duration_minutes: r.duration_minutes,
+        is_available: r.is_available,
+        booking_type: r.booking_type,
+        slot_config: r.booking_type === 'appointment' ? {
+          slot_duration: r.slot_duration_minutes_config,
+          working_days: r.working_days ? r.working_days.split(',') : [],
+          working_hours_from: r.working_hours_from,
+          working_hours_to: r.working_hours_to,
+          break_from: r.break_from,
+          break_to: r.break_to,
+        } : null,
+      },
+    });
+  } catch (error) {
+    console.error('diagnostic getServiceDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getMyServices,
   getCategories,
   addService,
   updateService,
   removeService,
+  getServiceDetail,
 };
