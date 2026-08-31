@@ -352,6 +352,21 @@ const getMyBookings = async (req, res) => {
       }
     }
 
+    // 4. Ambulance bookings
+    if (!type || type === 'ambulance') {
+      let abWhere = ['ab.user_id = ?'];
+      let abParams = [userId];
+      if (status) { abWhere.push('ab.status = ?'); abParams.push(status); }
+
+      const [abRows] = await pool.query(
+        `SELECT ab.booking_id, ab.status, ab.total_fare, ab.payment_status, ab.patient_name, ab.created_at, asr.name as ambulance_name FROM ambulance_bookings ab LEFT JOIN ambulance_services asr ON ab.partner_id = asr.id WHERE ${abWhere.join(' AND ')} ORDER BY ab.created_at DESC`,
+        abParams
+      );
+      for (const ab of abRows) {
+        allBookings.push({ booking_id: ab.booking_id, service_type: 'ambulance', status: ab.status, amount: ab.total_fare, payment_status: ab.payment_status, date: null, slot_time: null, ambulance_name: ab.ambulance_name, created_at: ab.created_at });
+      }
+    }
+
     // Sort by latest
     allBookings.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
@@ -1026,6 +1041,22 @@ const createDiagnosticBooking = async (req, res) => {
     } catch (paytmError) {
       paytmData = { txn_token: null, order_id: booking.booking_id, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl, error: paytmError.message };
     }
+
+    // Notify diagnostic center (online booking too)
+    try {
+      console.log(`[SSE DEBUG] Sending to diagnostic_${service.center_id}`);
+      const notificationService = require('../../services/notification.service');
+      const [centerRows] = await pool.query('SELECT fcm_token FROM diagnostic_centers WHERE id = ?', [service.center_id]);
+      if (centerRows[0]?.fcm_token) {
+        await notificationService.sendToDevice(centerRows[0].fcm_token, 'New Booking 📋', `New ${service.service_name} booking for ${booking_date}.`, { type: 'new_booking', booking_id: booking.booking_id });
+      }
+      const { sendToClient: sendSSE } = require('../../events/sse');
+      const sent = sendSSE(`diagnostic_${service.center_id}`, 'new_booking', {
+        booking_id: booking.booking_id, date: booking_date, service_name: service.service_name,
+        amount: finalAmount, patient_name, slot_time: slotTime, payment_method: 'online',
+      });
+      console.log(`[SSE DEBUG] SSE sent result: ${sent}, center_id: ${service.center_id}`);
+    } catch (notifErr) { console.error('Diagnostic notification error:', notifErr.message); }
 
     return res.status(201).json({
       message: 'Booking created. Complete payment.',

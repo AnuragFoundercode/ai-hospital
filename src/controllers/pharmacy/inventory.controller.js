@@ -119,4 +119,50 @@ const deleteMedicine = async (req, res) => {
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
-module.exports = { getCategories, getBrands, getMedicines, addMedicine, updateMedicine, deleteMedicine };
+/**
+ * GET /api/v1/pharmacy/medicine/:id
+ * Full medicine detail for vendor
+ */
+const getMedicineDetail = async (req, res) => {
+  try {
+    const pharmacyId = req.pharmacy.id;
+    const { id } = req.params;
+
+    const [rows] = await pool.query(
+      `SELECT pm.*, mc.name as category_name, mb.name as brand_name
+       FROM pharmacy_medicines pm
+       LEFT JOIN medicine_categories mc ON pm.category_id = mc.id
+       LEFT JOIN medicine_brands mb ON pm.brand_id = mb.id
+       WHERE pm.id = ? AND pm.pharmacy_id = ?`,
+      [id, pharmacyId]
+    );
+
+    if (!rows.length) return res.status(404).json({ message: 'Medicine not found.' });
+    const m = rows[0];
+
+    return res.status(200).json({
+      message: 'Medicine detail fetched.',
+      data: {
+        id: m.id,
+        name: m.name,
+        generic_name: m.generic_name,
+        category: { id: m.category_id, name: m.category_name },
+        brand: { id: m.brand_id, name: m.brand_name },
+        manufacturer: m.manufacturer,
+        short_description: m.short_description,
+        pricing: { purchase_price: m.purchase_price, mrp: m.mrp, selling_price: m.selling_price, gst_percent: m.gst_percent, discount_percent: m.mrp > 0 ? (((m.mrp - m.selling_price) / m.mrp) * 100).toFixed(1) : 0 },
+        inventory: { quantity: m.quantity, batch_number: m.batch_number, expiry_date: m.expiry_date, low_stock_alert: m.low_stock_alert, stock_status: m.quantity === 0 ? 'out_of_stock' : m.quantity <= m.low_stock_alert ? 'low_stock' : 'active' },
+        details: { prescription_required: m.prescription_required, salt_composition: m.salt_composition, dosage: m.dosage, uses: m.uses, how_to_use: m.how_to_use, side_effects: m.side_effects, storage_instructions: m.storage_instructions },
+        images: { medicine_image_url: m.medicine_image_url, strip_image_url: m.strip_image_url, additional_images: m.additional_images ? (typeof m.additional_images === 'string' ? JSON.parse(m.additional_images) : m.additional_images) : [] },
+        is_active: m.is_active,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+      },
+    });
+  } catch (error) {
+    console.error('pharmacy getMedicineDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+module.exports = { getCategories, getBrands, getMedicines, addMedicine, updateMedicine, deleteMedicine, getMedicineDetail };

@@ -109,5 +109,8 @@ router.post('/pharmacy-review', userAuth, pharmacyController.addPharmacyReview);
 router.get('/ambulance/categories', userAuth, ambulanceController.getCategories);
 router.get('/ambulances', userAuth, ambulanceController.getAmbulanceList);
 router.get('/ambulance/:id', userAuth, ambulanceController.getAmbulanceDetail);
+router.post('/ambulance/book', userAuth, ambulanceController.bookAmbulance);
+router.get('/ambulance-bookings', userAuth, ambulanceController.getAmbulanceBookings);
+router.get('/ambulance-booking/:booking_id', userAuth, ambulanceController.getAmbulanceBookingDetail);
 
 module.exports = router;

@@ -134,4 +134,142 @@ const getAmbulanceDetail = async (req, res) => {
   }
 };
 
-module.exports = { getCategories, getAmbulanceList, getAmbulanceDetail };
+/**
+ * POST /api/v1/user/ambulance/book
+ * Body: { ambulance_id (uuid), address_id, drop_address, drop_latitude, drop_longitude, patient_name, patient_age, patient_gender, contact_number, remark, payment_method }
+ */
+const bookAmbulance = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { ambulance_id, address_id, drop_address, drop_latitude, drop_longitude, patient_name, patient_age, patient_gender, contact_number, remark, payment_method } = req.body;
+
+    if (!ambulance_id || !address_id || !drop_address || !drop_latitude || !drop_longitude || !patient_name || !contact_number || !payment_method) {
+      return res.status(400).json({ message: 'Required: ambulance_id, address_id, drop_address, drop_latitude, drop_longitude, patient_name, contact_number, payment_method' });
+    }
+
+    if (!['online', 'cash'].includes(payment_method)) return res.status(400).json({ message: 'payment_method must be "online" or "cash".' });
+
+    // Get ambulance service
+    const [ambRows] = await pool.query(
+      `SELECT asr.id, asr.uuid, asr.name, asr.is_online, asr.base_fare, asr.per_km_charge, asr.fcm_token,
+              asv.id as vehicle_id, at.id as type_id, at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km
+       FROM ambulance_services asr
+       LEFT JOIN ambulance_vehicles asv ON asv.ambulance_service_id = asr.id AND asv.is_active = 1
+       LEFT JOIN ambulance_types at ON asv.ambulance_type_id = at.id
+       WHERE asr.uuid = ? AND asr.is_active = 1 AND asr.is_verified = 1
+       LIMIT 1`,
+      [ambulance_id]
+    );
+
+    if (!ambRows.length) return res.status(404).json({ message: 'Ambulance not found.' });
+    const amb = ambRows[0];
+
+    if (!amb.is_online) return res.status(400).json({ message: 'Ambulance is currently offline.' });
+
+    // Get pickup address
+    const [addrRows] = await pool.query('SELECT * FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+    if (!addrRows.length) return res.status(404).json({ message: 'Address not found.' });
+    const pickup = addrRows[0];
+
+    if (!pickup.latitude || !pickup.longitude) return res.status(400).json({ message: 'Pickup address must have latitude and longitude.' });
+
+    // Calculate distance & fare
+    const distanceInfo = await distanceService.getDistance(parseFloat(pickup.latitude), parseFloat(pickup.longitude), parseFloat(drop_latitude), parseFloat(drop_longitude));
+    const baseFare = parseFloat(amb.base_fare || amb.type_base_fare || 200);
+    const perKm = parseFloat(amb.per_km_charge || amb.type_per_km || 50);
+    const totalFare = baseFare + (distanceInfo.distance_km * perKm);
+
+    // Create booking
+    const bookingId = `AMB-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const categoryId = amb.type_id || 1;
+
+    await pool.query(
+      `INSERT INTO ambulance_bookings (booking_id, user_id, partner_id, category_id, pickup_latitude, pickup_longitude, pickup_address, drop_latitude, drop_longitude, drop_address, distance_km, estimated_time_minutes, base_charge, per_km_charge, total_fare, payment_method, status, patient_name, patient_condition, emergency_contact)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [bookingId, userId, amb.id, categoryId, pickup.latitude, pickup.longitude, `${pickup.address_line1}, ${pickup.city}`, drop_latitude, drop_longitude, drop_address, distanceInfo.distance_km, distanceInfo.duration_minutes, baseFare, perKm, totalFare.toFixed(2), payment_method, patient_name, `Age: ${patient_age || ''}, Gender: ${patient_gender || ''}`, contact_number]
+    );
+
+    // Online payment → Paytm
+    let paytmData = null;
+    if (payment_method === 'online') {
+      try {
+        const paytmService = require('../../services/paytm.service');
+        const paytmConfig = require('../../config/paytm');
+        const paytmResponse = await paytmService.initiateTransaction(bookingId, parseFloat(totalFare.toFixed(2)), userId);
+        if (paytmResponse.body?.txnToken) {
+          paytmData = { txn_token: paytmResponse.body.txnToken, order_id: bookingId, mid: paytmConfig.mid, amount: totalFare.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl };
+        } else {
+          paytmData = { txn_token: null, order_id: bookingId, mid: paytmConfig.mid, amount: totalFare.toFixed(2), error: paytmResponse.body?.resultInfo?.resultMsg || 'Failed' };
+        }
+      } catch (e) { paytmData = { txn_token: null, order_id: bookingId, error: e.message }; }
+    }
+
+    // Notify ambulance provider (FCM + SSE)
+    if (amb.fcm_token) {
+      const notificationService = require('../../services/notification.service');
+      await notificationService.sendToDevice(amb.fcm_token, 'New Ambulance Booking 🚑', `Pickup: ${pickup.address_line1}. Fare: ₹${totalFare.toFixed(0)}`, { type: 'new_ambulance_booking', booking_id: bookingId });
+    }
+    const { sendToClient } = require('../../events/sse');
+    sendToClient(`ambulance_${amb.id}`, 'new_booking', { booking_id: bookingId, pickup_address: pickup.address_line1, drop_address, fare: totalFare.toFixed(2), patient_name });
+
+    return res.status(201).json({
+      message: payment_method === 'cash' ? 'Ambulance booked! Pay in cash.' : 'Ambulance booked! Complete payment.',
+      data: {
+        booking_id: bookingId,
+        ambulance: { id: amb.uuid, name: amb.name },
+        trip: { pickup_address: `${pickup.address_line1}, ${pickup.city}`, drop_address, distance_km: distanceInfo.distance_km, estimated_minutes: distanceInfo.duration_minutes },
+        fare: { base_charge: baseFare, per_km_charge: perKm, total: parseFloat(totalFare.toFixed(2)) },
+        patient: { name: patient_name, age: patient_age, gender: patient_gender, contact: contact_number },
+        payment_method,
+        status: 'pending',
+        payment: paytmData,
+      },
+    });
+  } catch (error) {
+    console.error('bookAmbulance error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/user/ambulance-bookings?status=&page=&limit=
+ */
+const getAmbulanceBookings = async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    let where = ['ab.user_id = ?']; let params = [req.user.id];
+    if (status) { where.push('ab.status = ?'); params.push(status); }
+    const whereClause = where.join(' AND ');
+    const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM ambulance_bookings ab WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT ab.*, asr.uuid as amb_uuid, asr.name as amb_name, asr.mobile as amb_mobile, at.name as type_name
+       FROM ambulance_bookings ab
+       LEFT JOIN ambulance_services asr ON ab.partner_id = asr.id
+       LEFT JOIN ambulance_types at ON ab.category_id = at.id
+       WHERE ${whereClause} ORDER BY ab.created_at DESC LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+    return res.status(200).json({ message: 'Bookings fetched.', data: rows.map(b => ({ booking_id: b.booking_id, status: b.status, ambulance: { id: b.amb_uuid, name: b.amb_name, mobile: b.amb_mobile }, type: b.type_name, pickup_address: b.pickup_address, drop_address: b.drop_address, distance_km: b.distance_km, total_fare: b.total_fare, payment_method: b.payment_method, payment_status: b.payment_status, patient_name: b.patient_name, created_at: b.created_at })), pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) } });
+  } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
+ * GET /api/v1/user/ambulance-booking/:booking_id
+ */
+const getAmbulanceBookingDetail = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT ab.*, asr.uuid as amb_uuid, asr.name as amb_name, asr.mobile as amb_mobile, asr.profile_photo as amb_photo, asr.latitude as amb_lat, asr.longitude as amb_lng
+       FROM ambulance_bookings ab
+       LEFT JOIN ambulance_services asr ON ab.partner_id = asr.id
+       WHERE ab.booking_id = ? AND ab.user_id = ?`,
+      [req.params.booking_id, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Booking not found.' });
+    const b = rows[0];
+    return res.status(200).json({ message: 'Booking detail fetched.', data: { booking_id: b.booking_id, status: b.status, ambulance: { id: b.amb_uuid, name: b.amb_name, mobile: b.amb_mobile, photo: b.amb_photo, live_location: { lat: b.amb_lat, lng: b.amb_lng } }, pickup: { address: b.pickup_address, lat: b.pickup_latitude, lng: b.pickup_longitude }, drop: { address: b.drop_address, lat: b.drop_latitude, lng: b.drop_longitude }, trip: { distance_km: b.distance_km, estimated_minutes: b.estimated_time_minutes }, fare: { base_charge: b.base_charge, per_km_charge: b.per_km_charge, total: b.total_fare }, patient: { name: b.patient_name, condition: b.patient_condition, emergency_contact: b.emergency_contact }, payment: { method: b.payment_method, status: b.payment_status, transaction_id: b.transaction_id, paid_at: b.paid_at }, rating: { user_rating: b.user_rating, user_review: b.user_review }, timeline: { created_at: b.created_at, accepted_at: b.accepted_at, arrived_at: b.arrived_at, started_at: b.started_at, completed_at: b.completed_at, cancelled_at: b.cancelled_at } } });
+  } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+module.exports = { getCategories, getAmbulanceList, getAmbulanceDetail, bookAmbulance, getAmbulanceBookings, getAmbulanceBookingDetail };

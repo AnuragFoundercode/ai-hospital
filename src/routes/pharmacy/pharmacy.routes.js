@@ -28,6 +28,7 @@ router.get('/dashboard', pharmacyAuth, dashboardController.getDashboard);
 router.get('/categories', pharmacyAuth, inventoryController.getCategories);
 router.get('/brands', pharmacyAuth, inventoryController.getBrands);
 router.get('/medicines', pharmacyAuth, inventoryController.getMedicines);
+router.get('/medicine/:id', pharmacyAuth, inventoryController.getMedicineDetail);
 router.post('/medicines', pharmacyAuth, inventoryController.addMedicine);
 router.put('/medicines/:id', pharmacyAuth, inventoryController.updateMedicine);
 router.delete('/medicines/:id', pharmacyAuth, inventoryController.deleteMedicine);
