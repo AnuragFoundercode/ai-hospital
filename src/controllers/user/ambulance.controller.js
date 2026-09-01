@@ -24,7 +24,8 @@ const getAmbulanceList = async (req, res) => {
   try {
     const { pincode, type_id, user_lat, user_lng } = req.query;
 
-    let where = ['asv.is_active = 1', 'asv.is_available = 1', 'asr.is_active = 1', 'asr.is_verified = 1', 'asr.is_online = 1'];
+    // Base filter: partner-driver from ambulance_services (verified, active, online)
+    let where = ['asr.is_active = 1', 'asr.is_verified = 1', 'asr.is_online = 1', "asr.verification_status = 'approved'"];
     let params = [];
 
     // Zone filter by pincode
@@ -34,18 +35,22 @@ const getAmbulanceList = async (req, res) => {
       else { return res.status(200).json({ message: 'No ambulance available in this pincode.', data: [] }); }
     }
 
+    // Vehicle type filter
     if (type_id) { where.push('asv.ambulance_type_id = ?'); params.push(parseInt(type_id)); }
 
     const whereClause = where.join(' AND ');
 
     const [rows] = await pool.query(
-      `SELECT asv.id as vehicle_id, asv.vehicle_number, asv.vehicle_model,
-              asr.id as service_id, asr.uuid, asr.name, asr.owner_name, asr.mobile, asr.profile_photo, asr.base_latitude, asr.base_longitude, asr.latitude, asr.longitude, asr.is_online, asr.base_fare as service_base_fare, asr.per_km_charge as service_per_km,
-              at.id as type_id, at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km, at.description as type_description, at.icon_url as type_icon
-       FROM ambulance_vehicles asv
-       JOIN ambulance_services asr ON asv.ambulance_service_id = asr.id
-       JOIN ambulance_types at ON asv.ambulance_type_id = at.id
-       WHERE ${whereClause}`,
+      `SELECT asr.id as service_id, asr.uuid, asr.name, asr.owner_name, asr.full_name, asr.mobile, asr.profile_photo,
+              asr.base_latitude, asr.base_longitude, asr.latitude, asr.longitude, asr.is_online,
+              asr.base_fare as service_base_fare, asr.per_km_charge as service_per_km,
+              asv.vehicle_number, asv.vehicle_model, asv.ambulance_type_id as type_id,
+              at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km, at.description as type_description, at.icon_url as type_icon
+       FROM ambulance_services asr
+       JOIN ambulance_vehicles asv ON asv.ambulance_service_id = asr.id AND asv.is_active = 1 AND asv.is_available = 1
+       LEFT JOIN ambulance_types at ON asv.ambulance_type_id = at.id
+       WHERE ${whereClause}
+       GROUP BY asr.id`,
       params
     );
 
@@ -61,9 +66,8 @@ const getAmbulanceList = async (req, res) => {
 
       return {
         id: r.uuid,
-        vehicle_id: r.vehicle_id,
-        name: r.name,
-        owner_name: r.owner_name,
+        name: r.name || r.full_name,
+        owner_name: r.owner_name || r.full_name,
         profile_photo: r.profile_photo,
         mobile: r.mobile,
         vehicle: { number: r.vehicle_number, model: r.vehicle_model },
@@ -94,12 +98,13 @@ const getAmbulanceDetail = async (req, res) => {
     const { user_lat, user_lng } = req.query;
 
     const [rows] = await pool.query(
-      `SELECT asr.*, asv.vehicle_number, asv.vehicle_model, asv.ambulance_type_id,
+      `SELECT asr.*, asv.vehicle_number, asv.vehicle_model, asv.ambulance_type_id, asv.vehicle_registration_date, asv.insurance_valid_till,
               at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km, at.description as type_description
        FROM ambulance_services asr
        LEFT JOIN ambulance_vehicles asv ON asv.ambulance_service_id = asr.id AND asv.is_active = 1
        LEFT JOIN ambulance_types at ON asv.ambulance_type_id = at.id
-       WHERE asr.uuid = ? AND asr.is_active = 1`,
+       WHERE asr.uuid = ? AND asr.is_active = 1
+       GROUP BY asr.id`,
       [id]
     );
 
@@ -115,12 +120,12 @@ const getAmbulanceDetail = async (req, res) => {
       message: 'Ambulance detail fetched.',
       data: {
         id: r.uuid,
-        name: r.name,
-        owner_name: r.owner_name,
+        name: r.name || r.full_name,
+        owner_name: r.owner_name || r.full_name,
         mobile: r.mobile,
         profile_photo: r.profile_photo,
         registration_number: r.registration_number,
-        vehicle: { number: r.vehicle_number, model: r.vehicle_model },
+        vehicle: { number: r.vehicle_number, model: r.vehicle_model, registration_date: r.vehicle_registration_date, insurance_valid_till: r.insurance_valid_till },
         type: { id: r.ambulance_type_id, name: r.type_name, base_fare: r.type_base_fare, per_km_charge: r.type_per_km, description: r.type_description },
         location: { city: r.city, state: r.state, latitude: r.base_latitude, longitude: r.base_longitude, coverage_radius_km: r.coverage_radius_km },
         fare: { base_fare: r.base_fare || r.type_base_fare, per_km_charge: r.per_km_charge || r.type_per_km },
@@ -151,12 +156,14 @@ const bookAmbulance = async (req, res) => {
 
     // Get ambulance service
     const [ambRows] = await pool.query(
-      `SELECT asr.id, asr.uuid, asr.name, asr.is_online, asr.base_fare, asr.per_km_charge, asr.fcm_token,
-              asv.id as vehicle_id, at.id as type_id, at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km
+      `SELECT asr.id, asr.uuid, asr.name, asr.full_name, asr.is_online, asr.base_fare, asr.per_km_charge, asr.fcm_token,
+              asv.ambulance_type_id as type_id,
+              at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km
        FROM ambulance_services asr
        LEFT JOIN ambulance_vehicles asv ON asv.ambulance_service_id = asr.id AND asv.is_active = 1
        LEFT JOIN ambulance_types at ON asv.ambulance_type_id = at.id
        WHERE asr.uuid = ? AND asr.is_active = 1 AND asr.is_verified = 1
+       GROUP BY asr.id
        LIMIT 1`,
       [ambulance_id]
     );
@@ -216,7 +223,7 @@ const bookAmbulance = async (req, res) => {
       message: payment_method === 'cash' ? 'Ambulance booked! Pay in cash.' : 'Ambulance booked! Complete payment.',
       data: {
         booking_id: bookingId,
-        ambulance: { id: amb.uuid, name: amb.name },
+        ambulance: { id: amb.uuid, name: amb.name || amb.full_name },
         trip: { pickup_address: `${pickup.address_line1}, ${pickup.city}`, drop_address, distance_km: distanceInfo.distance_km, estimated_minutes: distanceInfo.duration_minutes },
         fare: { base_charge: baseFare, per_km_charge: perKm, total: parseFloat(totalFare.toFixed(2)) },
         patient: { name: patient_name, age: patient_age, gender: patient_gender, contact: contact_number },
