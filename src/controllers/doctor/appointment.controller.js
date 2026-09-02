@@ -1,5 +1,4 @@
 const appointmentModel = require('../../models/doctor/appointment.model');
-const walletModel = require('../../models/doctor/wallet.model');
 const { pool } = require('../../config/database');
 
 // ─────────────────────────────────────────────
@@ -179,59 +178,8 @@ const updateAppointmentNotes = async (req, res) => {
   }
 };
 
-/**
- * PUT /api/v1/doctor/appointment/:booking_id/complete
- * Doctor marks appointment as completed
- */
-const completeAppointment = async (req, res) => {
-  try {
-    const doctorId = req.doctor.id;
-    const { booking_id } = req.params;
-
-    const [rows] = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = ? AND provider_id = ? AND service_type = 'doctor_consultation'`,
-      [booking_id, doctorId]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ message: 'Appointment not found.' });
-    }
-
-    const booking = rows[0];
-
-    if (booking.status === 'completed') {
-      return res.status(400).json({ message: 'Already completed.' });
-    }
-
-    await pool.query(
-      `UPDATE bookings SET status = 'completed', completed_at = NOW() WHERE id = ?`,
-      [booking.id]
-    );
-
-    // Credit doctor wallet with consultation fee
-    if (booking.payment_status === 'paid') {
-      const amount = parseFloat(booking.final_amount);
-      await walletModel.credit(
-        doctorId,
-        amount,
-        `Consultation fee - ${booking.booking_id}`,
-        'consultation_fee',
-        booking.id
-      );
-    }
-
-    return res.status(200).json({      message: 'Appointment marked as completed.',
-      data: { booking_id, status: 'completed' },
-    });
-  } catch (error) {
-    console.error('completeAppointment error:', error.message);
-    return res.status(500).json({ message: 'Something went wrong.' });
-  }
-};
-
 module.exports = {
   getAppointments,
   getAppointmentDetail,
   updateAppointmentNotes,
-  completeAppointment,
 };

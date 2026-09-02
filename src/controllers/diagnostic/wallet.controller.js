@@ -199,6 +199,116 @@ const creditAfterComplete = async (centerId, bookingId, amount, paymentType) => 
   }
 };
 
+/**
+ * POST /api/v1/diagnostic/wallet/clear-due
+ * Body: { method: "wallet" | "online" }
+ * Clears ALL pending admin dues.
+ *  - method "wallet": deducts from wallet balance instantly, marks dues paid.
+ *  - method "online": initiates Paytm; dues cleared after /clear-due/verify.
+ */
+const clearAdminDue = async (req, res) => {
+  try {
+    const centerId = req.diagnostic.id;
+    const method = req.body.method || 'online';
+    if (!['wallet', 'online'].includes(method)) return res.status(400).json({ message: 'method must be "wallet" or "online".' });
+
+    // Total pending due
+    const [dueRows] = await pool.query('SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as cnt FROM diagnostic_admin_dues WHERE diagnostic_center_id = ? AND is_paid = 0', [centerId]);
+    const totalDue = parseFloat(dueRows[0].total);
+    const duesCount = dueRows[0].cnt;
+    if (totalDue <= 0) return res.status(400).json({ message: 'No pending admin due.' });
+
+    const paymentRef = `ADP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    // ─── Pay from wallet (instant) ───
+    if (method === 'wallet') {
+      const wallet = await getOrCreateWallet(centerId);
+      if (parseFloat(wallet.balance) < totalDue) {
+        return res.status(400).json({ message: 'Insufficient wallet balance to clear due.', data: { wallet_balance: wallet.balance, pending_due: totalDue } });
+      }
+      const newBalance = parseFloat(wallet.balance) - totalDue;
+      await pool.query('UPDATE diagnostic_wallets SET balance = ?, total_admin_due_paid = total_admin_due_paid + ? WHERE diagnostic_center_id = ?', [newBalance, totalDue, centerId]);
+      await pool.query("INSERT INTO diagnostic_wallet_transactions (diagnostic_center_id, type, amount, description, reference_type, balance_after) VALUES (?, 'debit', ?, ?, 'admin_due_payment', ?)", [centerId, totalDue, `Admin due cleared - ${paymentRef}`, newBalance]);
+      await pool.query("UPDATE diagnostic_admin_dues SET is_paid = 1, paid_at = NOW() WHERE diagnostic_center_id = ? AND is_paid = 0", [centerId]);
+      await pool.query("INSERT INTO diagnostic_admin_due_payments (payment_ref, diagnostic_center_id, amount, dues_count, method, status, paid_at) VALUES (?, ?, ?, ?, 'wallet', 'success', NOW())", [paymentRef, centerId, totalDue, duesCount]);
+      return res.status(200).json({ message: 'Admin due cleared from wallet.', data: { payment_ref: paymentRef, amount: totalDue, dues_count: duesCount, wallet_balance: newBalance } });
+    }
+
+    // ─── Pay online via Paytm ───
+    const paytmService = require('../../services/paytm.service');
+    const paytmConfig = require('../../config/paytm');
+    await pool.query("INSERT INTO diagnostic_admin_due_payments (payment_ref, diagnostic_center_id, amount, dues_count, method, status) VALUES (?, ?, ?, ?, 'online', 'pending')", [paymentRef, centerId, totalDue, duesCount]);
+
+    let paytmData = null;
+    try {
+      const paytmResponse = await paytmService.initiateTransaction(paymentRef, totalDue, centerId);
+      if (paytmResponse.body?.txnToken) {
+        paytmData = { txn_token: paytmResponse.body.txnToken, order_id: paymentRef, mid: paytmConfig.mid, amount: totalDue.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl };
+      } else {
+        paytmData = { txn_token: null, order_id: paymentRef, mid: paytmConfig.mid, amount: totalDue.toFixed(2), error: paytmResponse.body?.resultInfo?.resultMsg || 'Token generation failed' };
+      }
+    } catch (e) { paytmData = { txn_token: null, order_id: paymentRef, error: e.message }; }
+
+    return res.status(201).json({ message: 'Complete payment to clear admin due.', data: { payment_ref: paymentRef, amount: totalDue, dues_count: duesCount, payment: paytmData } });
+  } catch (error) { console.error('clearAdminDue error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
+ * POST /api/v1/diagnostic/wallet/clear-due/verify
+ * Body: { payment_ref }
+ * Verifies Paytm payment for an online admin-due clearance and marks dues paid.
+ */
+const verifyClearDue = async (req, res) => {
+  try {
+    const centerId = req.diagnostic.id;
+    const { payment_ref } = req.body;
+    if (!payment_ref) return res.status(400).json({ message: 'payment_ref required.' });
+
+    const [payRows] = await pool.query('SELECT * FROM diagnostic_admin_due_payments WHERE payment_ref = ? AND diagnostic_center_id = ?', [payment_ref, centerId]);
+    if (!payRows.length) return res.status(404).json({ message: 'Payment record not found.' });
+    const pay = payRows[0];
+    if (pay.status === 'success') return res.status(200).json({ message: 'Already cleared.', data: { payment_ref, amount: pay.amount } });
+
+    const paytmService = require('../../services/paytm.service');
+    const paytmResponse = await paytmService.verifyTransaction(payment_ref);
+    const resultStatus = paytmResponse.body?.resultInfo?.resultStatus;
+    const txnId = paytmResponse.body?.txnId || null;
+
+    if (resultStatus === 'TXN_SUCCESS') {
+      await pool.query("UPDATE diagnostic_admin_dues SET is_paid = 1, paid_at = NOW() WHERE diagnostic_center_id = ? AND is_paid = 0", [centerId]);
+      await pool.query('UPDATE diagnostic_wallets SET total_admin_due_paid = total_admin_due_paid + ? WHERE diagnostic_center_id = ?', [pay.amount, centerId]);
+      await pool.query("UPDATE diagnostic_admin_due_payments SET status = 'success', transaction_id = ?, paid_at = NOW() WHERE id = ?", [txnId, pay.id]);
+      return res.status(200).json({ message: 'Admin due cleared.', data: { payment_ref, amount: pay.amount, transaction_id: txnId } });
+    }
+
+    return res.status(200).json({ message: 'Payment not completed yet.', data: { status: 'pending' } });
+  } catch (error) { console.error('verifyClearDue error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
+ * GET /api/v1/diagnostic/wallet/due-payments?page=1&limit=20
+ * History of admin-due clearances.
+ */
+const getAdminDuePayments = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const centerId = req.diagnostic.id;
+
+    const [countResult] = await pool.query('SELECT COUNT(*) as total FROM diagnostic_admin_due_payments WHERE diagnostic_center_id = ? AND status = ?', [centerId, 'success']);
+    const [rows] = await pool.query(
+      "SELECT * FROM diagnostic_admin_due_payments WHERE diagnostic_center_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT ? OFFSET ?",
+      [centerId, parseInt(limit), offset]
+    );
+
+    return res.status(200).json({
+      message: 'Admin due payment history fetched.',
+      data: rows.map((p) => ({ id: p.id, payment_ref: p.payment_ref, amount: p.amount, dues_count: p.dues_count, method: p.method, transaction_id: p.transaction_id, paid_at: p.paid_at, created_at: p.created_at })),
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) },
+    });
+  } catch (error) { console.error('getAdminDuePayments error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
 module.exports = {
   getWallet,
   getTransactions,
@@ -206,4 +316,7 @@ module.exports = {
   requestWithdrawal,
   getWithdrawals,
   creditAfterComplete,
+  clearAdminDue,
+  verifyClearDue,
+  getAdminDuePayments,
 };

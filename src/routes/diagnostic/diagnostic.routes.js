@@ -64,6 +64,9 @@ router.get('/events/stream', diagnosticAuth, (req, res) => {
 router.get('/wallet', diagnosticAuth, walletController.getWallet);
 router.get('/wallet/transactions', diagnosticAuth, walletController.getTransactions);
 router.get('/wallet/admin-dues', diagnosticAuth, walletController.getAdminDues);
+router.post('/wallet/clear-due', diagnosticAuth, walletController.clearAdminDue);
+router.post('/wallet/clear-due/verify', diagnosticAuth, walletController.verifyClearDue);
+router.get('/wallet/due-payments', diagnosticAuth, walletController.getAdminDuePayments);
 router.post('/wallet/withdraw', diagnosticAuth, walletController.requestWithdrawal);
 router.get('/wallet/withdrawals', diagnosticAuth, walletController.getWithdrawals);
 

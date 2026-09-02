@@ -262,16 +262,16 @@ const updateStatus = async (req, res) => {
 
     const booking = rows[0];
 
-    // Map custom statuses to booking table status
-    let dbStatus = status;
-    if (['patient_arrived', 'scan_started'].includes(status)) dbStatus = 'in_progress';
-    if (['scan_completed', 'report_uploaded'].includes(status)) dbStatus = 'in_progress';
-    if (status === 'completed') dbStatus = 'completed';
+    // Prevent no-op / duplicate same-status updates
+    if (booking.status === status) {
+      return res.status(400).json({ message: `Booking is already '${status}'.` });
+    }
 
+    // Store the ACTUAL status (no mapping) — single status field manages everything
     const updateFields = ['status = ?'];
-    const updateValues = [dbStatus];
+    const updateValues = [status];
+    if (status === 'patient_arrived') { updateFields.push('started_at = NOW()'); }
     if (status === 'completed') { updateFields.push('completed_at = NOW()'); }
-    if (['patient_arrived', 'scan_started'].includes(status)) { updateFields.push('started_at = NOW()'); }
 
     await pool.query(`UPDATE bookings SET ${updateFields.join(', ')} WHERE id = ?`, [...updateValues, booking.id]);
     await pool.query("INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_type, changed_by_id, remarks) VALUES (?, ?, ?, 'provider', ?, ?)", [booking.id, booking.status, status, centerId, `Status updated to ${status}`]);

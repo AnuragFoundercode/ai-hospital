@@ -9,6 +9,8 @@ const diagnosticController = require('../../controllers/user/diagnostic.controll
 const bloodbankController = require('../../controllers/user/bloodbank.controller');
 const pharmacyController = require('../../controllers/user/pharmacy.controller');
 const ambulanceController = require('../../controllers/user/ambulance.controller');
+const callController = require('../../controllers/doctor/call.controller');
+const walletController = require('../../controllers/user/wallet.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -33,10 +35,22 @@ router.delete('/address/:id', userAuth, userController.deleteAddress);
 router.get('/doctor-categories', userAuth, doctorController.getDoctorCategories);
 router.get('/doctors', userAuth, doctorController.getDoctorList);
 router.get('/doctor/:id', userAuth, doctorController.getDoctorProfile);
-router.get('/doctor/:id/slots', userAuth, doctorController.getDoctorSlots);
+
+// Wallet APIs
+router.get('/wallet', userAuth, walletController.getWallet);
+router.post('/wallet/add', userAuth, walletController.addMoney);
+router.post('/wallet/verify', userAuth, walletController.verifyRecharge);
+router.get('/wallet/transactions', userAuth, walletController.getTransactions);
+
+// Doctor Video Call (per-minute) APIs
+router.post('/doctor/:id/call', userAuth, callController.startCall);
+router.post('/call/:call_id/tick', userAuth, callController.tickCall);
+router.post('/call/:call_id/end', userAuth, callController.endCall);
+router.post('/call/:call_id/reports', userAuth, callController.uploadUserReports);
+router.get('/call/:call_id', userAuth, callController.getCallDetail);
+router.get('/calls', userAuth, callController.getUserCallHistory);
 
 // Booking APIs (token required)
-router.post('/booking/doctor', userAuth, bookingController.createDoctorBooking);
 router.post('/booking/lab', userAuth, bookingController.createLabBooking);
 router.post('/booking/diagnostic', userAuth, bookingController.createDiagnosticBooking);
 router.post('/booking/:booking_id/pay', userAuth, bookingController.confirmPayment);

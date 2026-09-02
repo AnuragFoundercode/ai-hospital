@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const doctorController = require('../../controllers/doctor/doctor.controller');
 const appointmentController = require('../../controllers/doctor/appointment.controller');
-const slotController = require('../../controllers/doctor/slot.controller');
+const callController = require('../../controllers/doctor/call.controller');
 const dashboardController = require('../../controllers/doctor/dashboard.controller');
 const doctorAuth = require('../../middlewares/doctor/doctor.auth');
+const { registerClient } = require('../../events/sse');
 
 // ─────────────────────────────────────────────
 // DOCTOR ROUTES - Doctor Panel APIs
@@ -23,19 +24,20 @@ router.put('/registration/step5', doctorAuth, doctorController.step5Bank);
 
 // Profile (token required)
 router.get('/profile', doctorAuth, doctorController.getProfile);
-router.put('/toggle-availability', doctorAuth, doctorController.toggleAvailability);
+router.put('/call-status', doctorAuth, doctorController.updateCallStatus);
 
-// Appointments (token required)
+// Video Calls (per-minute)
+router.put('/call/:call_id/accept', doctorAuth, callController.acceptCall);
+router.put('/call/:call_id/reject', doctorAuth, callController.rejectCall);
+router.put('/call/:call_id/end', doctorAuth, callController.endCall);
+router.post('/call/:call_id/prescription', doctorAuth, callController.uploadPrescription);
+router.get('/call/:call_id', doctorAuth, callController.getCallDetail);
+router.get('/calls', doctorAuth, callController.getDoctorCallHistory);
+
+// Appointments / clinical notes (token required)
 router.get('/appointments', doctorAuth, appointmentController.getAppointments);
 router.get('/appointment/:booking_id', doctorAuth, appointmentController.getAppointmentDetail);
 router.put('/appointment/:booking_id/notes', doctorAuth, appointmentController.updateAppointmentNotes);
-router.put('/appointment/:booking_id/complete', doctorAuth, appointmentController.completeAppointment);
-
-// Slot Management (token required)
-router.get('/slots', doctorAuth, slotController.getSlots);
-router.post('/slots', doctorAuth, slotController.createSlot);
-router.put('/slots/:id', doctorAuth, slotController.updateSlot);
-router.delete('/slots/:id', doctorAuth, slotController.deleteSlot);
 
 // Dashboard (token required)
 router.get('/dashboard', doctorAuth, dashboardController.getDashboard);
@@ -45,5 +47,10 @@ router.get('/wallet', doctorAuth, dashboardController.getWallet);
 router.get('/wallet/transactions', doctorAuth, dashboardController.getTransactions);
 router.post('/wallet/withdraw', doctorAuth, dashboardController.requestWithdrawal);
 router.get('/wallet/withdrawals', doctorAuth, dashboardController.getWithdrawals);
+
+// SSE (real-time incoming calls)
+router.get('/events/stream', doctorAuth, (req, res) => {
+  registerClient(req, res, `doctor_${req.doctor.id}`);
+});
 
 module.exports = router;

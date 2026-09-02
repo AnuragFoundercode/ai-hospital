@@ -12,41 +12,33 @@ const walletModel = require('../../models/doctor/wallet.model');
 const getDashboard = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const today = new Date().toISOString().split('T')[0];
+    const istNow = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const today = new Date(istNow).toISOString().split('T')[0];
 
-    // Today's appointments
-    const [todayAppts] = await pool.query(
-      "SELECT COUNT(*) as count FROM bookings WHERE provider_id = ? AND service_type = 'doctor_consultation' AND booking_date = ? AND status IN ('confirmed', 'in_progress')",
-      [doctorId, today]
-    );
+    // Call status
+    const [docRows] = await pool.query('SELECT call_status FROM doctors WHERE id = ?', [doctorId]);
 
-    // Today's patients (completed today)
-    const [todayPatients] = await pool.query(
-      "SELECT COUNT(*) as count FROM bookings WHERE provider_id = ? AND service_type = 'doctor_consultation' AND booking_date = ? AND status = 'completed'",
-      [doctorId, today]
-    );
+    // Total completed calls
+    const [totalCalls] = await pool.query("SELECT COUNT(*) as count FROM doctor_calls WHERE doctor_id = ? AND status = 'completed'", [doctorId]);
 
-    // Total completed
-    const [totalCompleted] = await pool.query(
-      "SELECT COUNT(*) as count FROM bookings WHERE provider_id = ? AND service_type = 'doctor_consultation' AND status = 'completed'",
-      [doctorId]
-    );
+    // Today's completed calls + earnings + minutes
+    const [todayCalls] = await pool.query("SELECT COUNT(*) as count, COALESCE(SUM(total_minutes),0) as minutes, COALESCE(SUM(doctor_earning),0) as earning FROM doctor_calls WHERE doctor_id = ? AND status = 'completed' AND DATE(started_at) = ?", [doctorId, today]);
 
-    // Upcoming appointments
-    const [upcoming] = await pool.query(
-      "SELECT COUNT(*) as count FROM bookings WHERE provider_id = ? AND service_type = 'doctor_consultation' AND status IN ('confirmed', 'pending') AND booking_date >= ?",
-      [doctorId, today]
-    );
+    // Total minutes talked
+    const [totalMinutes] = await pool.query("SELECT COALESCE(SUM(total_minutes),0) as minutes FROM doctor_calls WHERE doctor_id = ? AND status = 'completed'", [doctorId]);
 
-    // Wallet balance
+    // Wallet
     const wallet = await walletModel.getWallet(doctorId);
 
-    return res.status(200).json({      message: 'Dashboard fetched.',
+    return res.status(200).json({
+      message: 'Dashboard fetched.',
       data: {
-        today_appointments: todayAppts[0].count,
-        today_patients: todayPatients[0].count,
-        total_completed: totalCompleted[0].count,
-        upcoming_appointments: upcoming[0].count,
+        call_status: docRows[0]?.call_status || 'offline',
+        total_calls: totalCalls[0].count,
+        today_calls: todayCalls[0].count,
+        today_minutes: parseInt(todayCalls[0].minutes),
+        today_earning: parseFloat(todayCalls[0].earning),
+        total_minutes: parseInt(totalMinutes[0].minutes),
         wallet: {
           balance: wallet.balance,
           total_earned: wallet.total_earned,

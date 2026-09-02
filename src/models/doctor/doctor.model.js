@@ -49,8 +49,8 @@ const updatePersonalDetails = async (id, data) => {
 // ─── STEP 2: Professional Details ───
 const updateProfessionalDetails = async (id, data) => {
   const [result] = await pool.query(
-    `UPDATE doctors SET category_id = ?, qualification = ?, experience_years = ?, registration_number = ?, consultation_fee = ?, follow_up_fee = ?, spoken_languages = ?, registration_step = GREATEST(registration_step, 2) WHERE id = ?`,
-    [data.category_id, data.qualification, data.experience_years || 0, data.registration_number, data.consultation_fee || 0, data.follow_up_fee || 0, data.spoken_languages || null, id]
+    `UPDATE doctors SET category_id = ?, qualification = ?, experience_years = ?, registration_number = ?, per_minute_fee = ?, spoken_languages = ?, registration_step = GREATEST(registration_step, 2) WHERE id = ?`,
+    [data.category_id, data.qualification, data.experience_years || 0, data.registration_number, data.per_minute_fee || 0, data.spoken_languages || null, id]
   );
   return result;
 };
@@ -121,7 +121,7 @@ const getBankDetails = async (doctorId) => {
 
 // ─── Generic Update ───
 const updateProfile = async (id, data) => {
-  const allowedFields = ['full_name', 'email', 'gender', 'qualification', 'specialization', 'registration_number', 'experience_years', 'bio', 'consultation_fee', 'follow_up_fee', 'category_id', 'is_available_online', 'spoken_languages'];
+  const allowedFields = ['full_name', 'email', 'gender', 'qualification', 'specialization', 'registration_number', 'experience_years', 'bio', 'per_minute_fee', 'category_id', 'call_status', 'spoken_languages'];
   const fields = [];
   const values = [];
 

@@ -11,175 +11,9 @@ const { sendToLab, sendToDoctor, sendToClient } = require('../../events/sse');
 // BOOKING CONTROLLER - For patient app
 // ─────────────────────────────────────────────
 
-/**
- * POST /api/v1/user/booking/doctor
- * Body: { doctor_id, slot_id, consultation_type, user_notes }
- * 
- * FLOW:
- * 1. Validate doctor exists & is active
- * 2. Parse slot_id → date + time
- * 3. Check slot is available (not already booked)
- * 4. Create booking with status "pending" & payment_status "unpaid"
- * 5. Return booking details (user will pay next)
- */
-const createDoctorBooking = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { doctor_id, slot_id, consultation_type, user_notes, attachments } = req.body;
-
-    // Validate input
-    if (!doctor_id || !slot_id) {
-      return res.status(400).json({        message: 'doctor_id and slot_id are required.',
-      });
-    }
-
-    // Find doctor
-    const doctor = await doctorModel.findByUuid(doctor_id);
-    if (!doctor) {
-      return res.status(404).json({        message: 'Doctor not found.',
-      });
-    }
-
-    // Parse slot_id → "2026-07-29_0900" → date: "2026-07-29", time: "09:00"
-    const parts = slot_id.split('_');
-    if (parts.length !== 2) {
-      return res.status(400).json({        message: 'Invalid slot_id format.',
-      });
-    }
-
-    const bookingDate = parts[0];
-    const timeRaw = parts[1]; // "0900"
-    const slotTime = `${timeRaw.slice(0, 2)}:${timeRaw.slice(2)}`;
-
-    // Validate date is not in past
-    const today = new Date().toISOString().split('T')[0];
-    if (bookingDate < today) {
-      return res.status(400).json({        message: 'Cannot book for past dates.',
-      });
-    }
-
-    // Check if slot is already booked
-    const isBooked = await bookingModel.isSlotBooked('doctor_consultation', doctor.id, bookingDate, slotTime);
-    if (isBooked) {
-      return res.status(409).json({        message: 'This slot is already booked. Please choose another slot.',
-      });
-    }
-
-    // Calculate end time (from doctor's availability slot_duration)
-    const slots = await doctorModel.getSlotsByDate(doctor.id, bookingDate);
-    const matchedSlot = slots.find((s) => s.time === slotTime);
-
-    if (!matchedSlot) {
-      return res.status(400).json({        message: 'Doctor is not available at this time on selected date.',
-      });
-    }
-
-    // Pricing
-    const baseAmount = parseFloat(doctor.consultation_fee);
-    const taxAmount = 0; // Add tax logic if needed
-    const finalAmount = baseAmount + taxAmount;
-
-    // Create booking
-    const booking = await bookingModel.create({
-      user_id: userId,
-      service_type: 'doctor_consultation',
-      provider_id: doctor.id,
-      status: 'pending',
-      booking_date: bookingDate,
-      slot_start_time: slotTime,
-      slot_end_time: matchedSlot.end_time,
-      base_amount: baseAmount,
-      discount_amount: 0,
-      tax_amount: taxAmount,
-      final_amount: finalAmount,
-      payment_status: 'unpaid',
-      payment_method: null,
-      metadata: {
-        consultation_type: consultation_type || 'online',
-        doctor_name: doctor.full_name,
-        doctor_category: doctor.category_name,
-        attachments: attachments || [],
-      },
-      user_notes: user_notes || null,
-    });
-
-    // Add status history
-    await bookingModel.addStatusHistory(booking.id, null, 'pending', 'user', userId, 'Booking created');
-
-    // Initiate Paytm transaction
-    let paytmData = null;
-    try {
-      const paytmResponse = await paytmService.initiateTransaction(
-        booking.booking_id,
-        finalAmount,
-        userId
-      );
-
-      if (paytmResponse.body && paytmResponse.body.txnToken) {
-        paytmData = {
-          txn_token: paytmResponse.body.txnToken,
-          order_id: booking.booking_id,
-          mid: paytmConfig.mid,
-          amount: finalAmount.toFixed(2),
-          callback_url: paytmConfig.callbackUrl,
-          website: paytmConfig.website,
-          base_url: paytmConfig.baseUrl,
-        };
-      } else {
-        // Paytm API responded but no token - return basic payment info
-        paytmData = {
-          txn_token: null,
-          order_id: booking.booking_id,
-          mid: paytmConfig.mid,
-          amount: finalAmount.toFixed(2),
-          callback_url: paytmConfig.callbackUrl,
-          website: paytmConfig.website,
-          base_url: paytmConfig.baseUrl,
-          error: paytmResponse.body?.resultInfo?.resultMsg || 'Token generation failed',
-        };
-      }
-    } catch (paytmError) {
-      console.error('Paytm initiation failed:', paytmError.message);
-      // Still return payment config so frontend can retry
-      paytmData = {
-        txn_token: null,
-        order_id: booking.booking_id,
-        mid: paytmConfig.mid,
-        amount: finalAmount.toFixed(2),
-        callback_url: paytmConfig.callbackUrl,
-        website: paytmConfig.website,
-        base_url: paytmConfig.baseUrl,
-        error: paytmError.message,
-      };
-    }
-
-    return res.status(201).json({      message: 'Booking created. Please complete payment.',
-      data: {
-        booking_id: booking.booking_id,
-        doctor_name: doctor.full_name,
-        doctor_photo: doctor.profile_photo,
-        category: doctor.category_name,
-        consultation_type: consultation_type || 'online',
-        date: bookingDate,
-        slot_time: slotTime,
-        slot_end_time: matchedSlot.end_time,
-        amount: {
-          base: baseAmount,
-          tax: taxAmount,
-          discount: 0,
-          total: finalAmount,
-        },
-        status: 'pending',
-        payment_status: 'unpaid',
-        payment: paytmData,
-      },
-    });
-  } catch (error) {
-    console.error('createDoctorBooking error:', error.message);
-    return res.status(500).json({      message: 'Something went wrong.',
-    });
-  }
-};
+// NOTE: Doctor bookings are now handled as per-minute video calls
+// (see src/controllers/doctor/call.controller.js). The old slot+Paytm
+// createDoctorBooking flow has been removed.
 
 /**
  * POST /api/v1/user/booking/:booking_id/pay
@@ -255,13 +89,6 @@ const confirmPayment = async (req, res) => {
         user_notes: updatedBooking.user_notes,
       });
       console.log(`📡 SSE sent: ${sent}`);
-    } else if (updatedBooking.service_type === 'doctor_consultation') {
-      sendToDoctor(updatedBooking.provider_id, 'new_booking', {
-        booking_id: updatedBooking.booking_id,
-        date: updatedBooking.booking_date,
-        slot_time: updatedBooking.slot_start_time,
-        amount: updatedBooking.final_amount,
-      });
     } else if (updatedBooking.service_type === 'diagnostic_scan') {
       const { sendToClient } = require('../../events/sse');
       sendToClient(`diagnostic_${updatedBooking.provider_id}`, 'new_booking', {
@@ -1158,7 +985,6 @@ const getAllBookings = async (req, res) => {
 };
 
 module.exports = {
-  createDoctorBooking,
   createLabBooking,
   createDiagnosticBooking,
   confirmPayment,

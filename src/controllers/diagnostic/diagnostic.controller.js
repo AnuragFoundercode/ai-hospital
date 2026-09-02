@@ -84,6 +84,7 @@ const login = async (req, res) => {
           id: center.uuid,
           name: center.name,
           email: center.email,
+          profile_photo: center.profile_photo,
           verification_status: center.verification_status,
           is_verified: center.is_verified,
         },

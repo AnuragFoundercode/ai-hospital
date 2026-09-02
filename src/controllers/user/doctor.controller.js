@@ -21,21 +21,18 @@ const getDoctorList = async (req, res) => {
       search: search || null,
     });
 
-    const doctorIds = result.doctors.map((d) => d.id);
-    const availability = await doctorModel.getTodayAvailability(doctorIds);
-
     const doctors = result.doctors.map((doc) => ({
       id: doc.uuid,
       name: doc.full_name,
       gender: doc.gender,
       profile_photo: doc.profile_photo,
       rating: doc.average_rating,
-      consultation_fee: doc.consultation_fee,
+      per_minute_fee: doc.per_minute_fee,
+      call_status: doc.call_status,
+      is_online: doc.call_status === 'online',
       qualification: doc.qualification,
       experience_years: doc.experience_years,
       category: doc.category_name,
-      today_available: availability[doc.id] ? true : false,
-      today_slots: availability[doc.id] || [],
     }));
 
     const totalPages = Math.ceil(result.total / result.limit);
@@ -89,9 +86,6 @@ const getDoctorProfile = async (req, res) => {
       });
     }
 
-    // Get weekly availability
-    const availability = await doctorModel.getWeeklyAvailability(doctor.id);
-
     // Get reviews
     const reviews = await doctorModel.getReviews(doctor.id, 10);
 
@@ -103,20 +97,6 @@ const getDoctorProfile = async (req, res) => {
       review: r.user_review,
       date: r.rated_at,
     }));
-
-    // Format availability by day
-    const weeklySchedule = {};
-    for (const slot of availability) {
-      if (!weeklySchedule[slot.day_of_week]) {
-        weeklySchedule[slot.day_of_week] = [];
-      }
-      weeklySchedule[slot.day_of_week].push({
-        start_time: slot.start_time,
-        end_time: slot.end_time,
-        slot_duration_minutes: slot.slot_duration_minutes,
-        consultation_type: slot.consultation_type,
-      });
-    }
 
     return res.status(200).json({      message: 'Doctor profile fetched.',
       data: {
@@ -134,10 +114,9 @@ const getDoctorProfile = async (req, res) => {
         registration_number: doctor.registration_number,
         registration_council: doctor.registration_council,
         languages: doctor.languages,
-        consultation_fee: doctor.consultation_fee,
-        follow_up_fee: doctor.follow_up_fee,
-        is_available_online: doctor.is_available_online,
-        availability: weeklySchedule,
+        per_minute_fee: doctor.per_minute_fee,
+        call_status: doctor.call_status,
+        is_online: doctor.call_status === 'online',
         reviews: formattedReviews,
       },
     });
@@ -148,72 +127,8 @@ const getDoctorProfile = async (req, res) => {
   }
 };
 
-/**
- * GET /api/v1/user/doctor/:id/slots?date=2026-07-28
- * Get available time slots for a doctor on a specific date
- */
-const getDoctorSlots = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { date } = req.query;
-
-    if (!date) {
-      return res.status(400).json({        message: 'Date is required. Format: YYYY-MM-DD',
-      });
-    }
-
-    // Find doctor
-    const doctor = await doctorModel.findByUuid(id);
-    if (!doctor) {
-      return res.status(404).json({        message: 'Doctor not found.',
-      });
-    }
-
-    // Get slots
-    const slots = await doctorModel.getSlotsByDate(doctor.id, date);
-
-    // Filter out past slots if today (IST)
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const isToday = date === todayStr;
-
-    let filteredSlots = slots;
-    if (isToday) {
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      filteredSlots = slots.filter((s) => {
-        const timeStr = s.time || s.start_time;
-        if (!timeStr) return true;
-        const parts = timeStr.split(':');
-        const slotMinutes = parseInt(parts[0]) * 60 + parseInt(parts[1]);
-        return slotMinutes > currentMinutes;
-      });
-    }
-
-    // Separate available & booked
-    const available_slots = filteredSlots.filter((s) => !s.is_booked);
-    const booked_slots = filteredSlots.filter((s) => s.is_booked);
-
-    return res.status(200).json({      message: 'Slots fetched.',
-      data: {
-        doctor_id: doctor.uuid,
-        doctor_name: doctor.full_name,
-        date,
-        total_slots: filteredSlots.length,
-        available_count: available_slots.length,
-        booked_count: booked_slots.length,
-        slots: filteredSlots,
-      },
-    });
-  } catch (error) {
-    console.error('getDoctorSlots error:', error.message);
-    return res.status(500).json({      message: 'Something went wrong.',
-    });
-  }
-};
-
 module.exports = {
   getDoctorList,
   getDoctorCategories,
   getDoctorProfile,
-  getDoctorSlots,
 };

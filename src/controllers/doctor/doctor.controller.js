@@ -114,10 +114,13 @@ const step1Personal = async (req, res) => {
 const step2Professional = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const { category_id, qualification, experience_years, registration_number, consultation_fee, follow_up_fee, spoken_languages } = req.body;
+    const { category_id, qualification, experience_years, registration_number, per_minute_fee, spoken_languages } = req.body;
 
     if (!qualification || !registration_number) {
       return res.status(400).json({ message: 'Qualification and registration number required.' });
+    }
+    if (per_minute_fee === undefined || per_minute_fee === null || parseFloat(per_minute_fee) < 0) {
+      return res.status(400).json({ message: 'Valid per_minute_fee required.' });
     }
 
     await doctorModel.updateProfessionalDetails(doctorId, {
@@ -125,8 +128,7 @@ const step2Professional = async (req, res) => {
       qualification,
       experience_years,
       registration_number,
-      consultation_fee,
-      follow_up_fee,
+      per_minute_fee,
       spoken_languages: Array.isArray(spoken_languages) ? spoken_languages.join(', ') : spoken_languages,
     });
 
@@ -254,10 +256,9 @@ const getProfile = async (req, res) => {
           registration_number: doctor.registration_number,
           registration_council: doctor.registration_council,
           experience_years: doctor.experience_years,
-          consultation_fee: doctor.consultation_fee,
-          follow_up_fee: doctor.follow_up_fee,
+          per_minute_fee: doctor.per_minute_fee,
           spoken_languages: doctor.spoken_languages,
-          is_available_online: doctor.is_available_online,
+          call_status: doctor.call_status,
         },
         clinic: clinic ? {
           clinic_name: clinic.clinic_name,
@@ -293,22 +294,30 @@ const getProfile = async (req, res) => {
 };
 
 /**
- * PUT /api/v1/doctor/toggle-availability
- * Toggle online/offline status
+ * PUT /api/v1/doctor/call-status
+ * Set 3-state call status: online | offline | busy
+ * Body: { status }
  */
-const toggleAvailability = async (req, res) => {
+const updateCallStatus = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
+    const { status } = req.body;
+
+    if (!['online', 'offline', 'busy'].includes(status)) {
+      return res.status(400).json({ message: 'status must be online, offline or busy.' });
+    }
+
     const doctor = await doctorModel.findById(doctorId);
+    if (doctor.verification_status !== 'approved') {
+      return res.status(400).json({ message: 'Account not verified yet.' });
+    }
 
-    const newStatus = doctor.is_available_online ? 0 : 1;
-    await doctorModel.updateProfile(doctorId, { is_available_online: newStatus });
+    await doctorModel.updateProfile(doctorId, { call_status: status });
 
-    return res.status(200).json({      message: newStatus ? 'You are now online.' : 'You are now offline.',
-      data: { is_available_online: newStatus },
-    });
+    const msg = { online: 'You are now online.', offline: 'You are now offline.', busy: 'You are now busy.' }[status];
+    return res.status(200).json({ message: msg, data: { call_status: status } });
   } catch (error) {
-    console.error('toggleAvailability error:', error.message);
+    console.error('updateCallStatus error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
@@ -322,5 +331,5 @@ module.exports = {
   step4Documents,
   step5Bank,
   getProfile,
-  toggleAvailability,
+  updateCallStatus,
 };
