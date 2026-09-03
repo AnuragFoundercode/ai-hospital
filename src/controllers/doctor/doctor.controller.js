@@ -2,7 +2,8 @@ const jwt = require('jsonwebtoken');
 const doctorModel = require('../../models/doctor/doctor.model');
 
 // ─────────────────────────────────────────────
-// DOCTOR CONTROLLER - Doctor Panel APIs
+// DOCTOR CONTROLLER - vendor-style 4-step registration
+// step1 personal | step2 professional | step3 documents | step4 bank
 // ─────────────────────────────────────────────
 
 const STATIC_OTP = '111111';
@@ -63,11 +64,13 @@ const verifyOtp = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
-    return res.status(200).json({      message: is_new_user ? 'OTP verified. Please complete registration.' : 'Login successful.',
+    return res.status(200).json({
+      message: is_new_user ? 'OTP verified. Please complete registration.' : 'Login successful.',
       data: {
         token,
         is_new_user,
         registration_step: doctor.registration_step || 0,
+        verification_status: doctor.verification_status,
         doctor: {
           id: doctor.uuid,
           full_name: doctor.full_name,
@@ -84,8 +87,22 @@ const verifyOtp = async (req, res) => {
 };
 
 /**
+ * GET /api/v1/doctor/categories
+ * Specialization dropdown list (from doctor_categories)
+ */
+const getCategories = async (req, res) => {
+  try {
+    const categories = await doctorModel.getCategories();
+    return res.status(200).json({ message: 'Categories fetched.', data: categories });
+  } catch (error) {
+    console.error('doctor getCategories error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
  * PUT /api/v1/doctor/registration/step1
- * Personal Details: name, email, dob, gender
+ * Personal: full_name, email, date_of_birth, gender
  */
 const step1Personal = async (req, res) => {
   try {
@@ -95,27 +112,31 @@ const step1Personal = async (req, res) => {
     if (!full_name || full_name.trim() === '') {
       return res.status(400).json({ message: 'Full name is required.' });
     }
+    if (gender && !['male', 'female', 'other'].includes(gender)) {
+      return res.status(400).json({ message: 'gender must be male, female or other.' });
+    }
 
     await doctorModel.updatePersonalDetails(doctorId, { full_name: full_name.trim(), email, date_of_birth, gender });
 
-    return res.status(200).json({      message: 'Personal details saved.',
-      data: { registration_step: 1 },
-    });
+    return res.status(200).json({ message: 'Personal details saved.', data: { registration_step: 1 } });
   } catch (error) {
-    console.error('step1 error:', error.message);
+    console.error('doctor step1 error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
 /**
  * PUT /api/v1/doctor/registration/step2
- * Professional: category_id, qualification, experience, registration_number, fees, languages
+ * Professional: category_id (specialization), qualification, experience_years, registration_number, per_minute_fee
  */
 const step2Professional = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const { category_id, qualification, experience_years, registration_number, per_minute_fee, spoken_languages } = req.body;
+    const { category_id, qualification, experience_years, registration_number, per_minute_fee } = req.body;
 
+    if (!category_id) {
+      return res.status(400).json({ message: 'category_id (specialization) is required.' });
+    }
     if (!qualification || !registration_number) {
       return res.status(400).json({ message: 'Qualification and registration number required.' });
     }
@@ -129,94 +150,65 @@ const step2Professional = async (req, res) => {
       experience_years,
       registration_number,
       per_minute_fee,
-      spoken_languages: Array.isArray(spoken_languages) ? spoken_languages.join(', ') : spoken_languages,
     });
 
-    return res.status(200).json({      message: 'Professional details saved.',
-      data: { registration_step: 2 },
-    });
+    return res.status(200).json({ message: 'Professional details saved.', data: { registration_step: 2 } });
   } catch (error) {
-    console.error('step2 error:', error.message);
+    console.error('doctor step2 error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
 /**
  * PUT /api/v1/doctor/registration/step3
- * Clinic: clinic_name, address, city, state, pincode, zone
+ * Documents: medical_registration_url, degree_certificate_url, aadhaar_card_url, pan_card_url, profile_photo
  */
-const step3Clinic = async (req, res) => {
+const step3Documents = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const { clinic_name, address, city, state, pincode, zone } = req.body;
+    const { medical_registration_url, degree_certificate_url, aadhaar_card_url, pan_card_url, profile_photo } = req.body;
 
-    if (!clinic_name || !address || !city || !state || !pincode) {
-      return res.status(400).json({ message: 'All clinic fields are required.' });
+    if (!medical_registration_url || !degree_certificate_url) {
+      return res.status(400).json({ message: 'Medical registration and degree certificate URLs are required.' });
     }
 
-    await doctorModel.upsertClinicDetails(doctorId, { clinic_name, address, city, state, pincode, zone });
-
-    return res.status(200).json({      message: 'Clinic details saved.',
-      data: { registration_step: 3 },
+    await doctorModel.updateDocuments(doctorId, {
+      medical_registration_url,
+      degree_certificate_url,
+      aadhaar_card_url,
+      pan_card_url,
+      profile_photo,
     });
+
+    return res.status(200).json({ message: 'Documents uploaded.', data: { registration_step: 3 } });
   } catch (error) {
-    console.error('step3 error:', error.message);
+    console.error('doctor step3 error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
 /**
  * PUT /api/v1/doctor/registration/step4
- * Documents: medical_registration_certificate, degree_certificate, aadhaar_card, pan_card, profile_photo
- * All are Cloudinary URLs
+ * Bank: account_number, bank_name, account_holder_name, ifsc_code
+ * → submit → verification_status = 'pending' (admin verifies)
  */
-const step4Documents = async (req, res) => {
+const step4Bank = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const { medical_registration_certificate, degree_certificate, aadhaar_card, pan_card, profile_photo } = req.body;
+    const { account_number, bank_name, account_holder_name, ifsc_code } = req.body;
 
-    if (!medical_registration_certificate || !degree_certificate) {
-      return res.status(400).json({ message: 'Medical registration certificate and degree certificate are required.' });
-    }
-
-    await doctorModel.updateDocuments(doctorId, {
-      medical_registration_certificate,
-      degree_certificate,
-      aadhaar_card,
-      pan_card,
-      profile_photo,
-    });
-
-    return res.status(200).json({      message: 'Documents uploaded.',
-      data: { registration_step: 4 },
-    });
-  } catch (error) {
-    console.error('step4 error:', error.message);
-    return res.status(500).json({ message: 'Something went wrong.' });
-  }
-};
-
-/**
- * PUT /api/v1/doctor/registration/step5
- * Bank: account_holder_name, bank_name, account_number, ifsc_code
- * After this → account goes to "pending" verification by admin
- */
-const step5Bank = async (req, res) => {
-  try {
-    const doctorId = req.doctor.id;
-    const { account_holder_name, bank_name, account_number, ifsc_code } = req.body;
-
-    if (!account_holder_name || !bank_name || !account_number || !ifsc_code) {
+    if (!account_number || !bank_name || !account_holder_name || !ifsc_code) {
       return res.status(400).json({ message: 'All bank fields are required.' });
     }
 
     await doctorModel.upsertBankDetails(doctorId, { account_holder_name, bank_name, account_number, ifsc_code });
 
-    return res.status(200).json({      message: 'Registration complete! Your account is under review. Admin will verify and approve.',
-      data: { registration_step: 5, verification_status: 'pending' },
+    return res.status(200).json({
+      message: 'Registration complete! Your account is under review. Admin will verify and approve.',
+      data: { registration_step: 4, verification_status: 'pending' },
     });
   } catch (error) {
-    console.error('step5 error:', error.message);
+    console.error('doctor step4 error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
@@ -228,18 +220,19 @@ const getProfile = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
     const doctor = await doctorModel.findById(doctorId);
-    const clinic = await doctorModel.getClinicDetails(doctorId);
-    const bank = await doctorModel.getBankDetails(doctorId);
-
     if (!doctor) {
       return res.status(404).json({ message: 'Doctor not found.' });
     }
+    const bank = await doctorModel.getBankDetails(doctorId);
 
-    return res.status(200).json({      message: 'Profile fetched.',
+    return res.status(200).json({
+      message: 'Profile fetched.',
       data: {
         id: doctor.uuid,
         registration_step: doctor.registration_step,
         verification_status: doctor.verification_status,
+        call_status: doctor.call_status,
+        admin_commission_percent: doctor.admin_commission_percent,
         personal: {
           full_name: doctor.full_name,
           mobile: doctor.mobile,
@@ -252,27 +245,15 @@ const getProfile = async (req, res) => {
           category: doctor.category_name,
           category_id: doctor.category_id,
           qualification: doctor.qualification,
-          specialization: doctor.specialization,
           registration_number: doctor.registration_number,
-          registration_council: doctor.registration_council,
           experience_years: doctor.experience_years,
           per_minute_fee: doctor.per_minute_fee,
-          spoken_languages: doctor.spoken_languages,
-          call_status: doctor.call_status,
         },
-        clinic: clinic ? {
-          clinic_name: clinic.clinic_name,
-          address: clinic.address,
-          city: clinic.city,
-          state: clinic.state,
-          pincode: clinic.pincode,
-          zone: clinic.zone,
-        } : null,
         documents: {
-          medical_registration_certificate: doctor.medical_license_url,
-          degree_certificate: doctor.degree_certificate_url,
-          aadhaar_card: doctor.aadhaar_url,
-          pan_card: doctor.pan_card_url,
+          medical_registration_url: doctor.medical_license_url,
+          degree_certificate_url: doctor.degree_certificate_url,
+          aadhaar_card_url: doctor.aadhaar_url,
+          pan_card_url: doctor.pan_card_url,
           profile_photo: doctor.profile_photo,
         },
         bank: bank ? {
@@ -295,8 +276,7 @@ const getProfile = async (req, res) => {
 
 /**
  * PUT /api/v1/doctor/call-status
- * Set 3-state call status: online | offline | busy
- * Body: { status }
+ * 3-state: online | offline | busy (online requires approved account)
  */
 const updateCallStatus = async (req, res) => {
   try {
@@ -308,8 +288,8 @@ const updateCallStatus = async (req, res) => {
     }
 
     const doctor = await doctorModel.findById(doctorId);
-    if (doctor.verification_status !== 'approved') {
-      return res.status(400).json({ message: 'Account not verified yet.' });
+    if (status === 'online' && doctor.verification_status !== 'approved') {
+      return res.status(400).json({ message: 'Account not verified yet. Cannot go online.' });
     }
 
     await doctorModel.updateProfile(doctorId, { call_status: status });
@@ -317,7 +297,7 @@ const updateCallStatus = async (req, res) => {
     const msg = { online: 'You are now online.', offline: 'You are now offline.', busy: 'You are now busy.' }[status];
     return res.status(200).json({ message: msg, data: { call_status: status } });
   } catch (error) {
-    console.error('updateCallStatus error:', error.message);
+    console.error('doctor updateCallStatus error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
@@ -325,11 +305,11 @@ const updateCallStatus = async (req, res) => {
 module.exports = {
   sendOtp,
   verifyOtp,
+  getCategories,
   step1Personal,
   step2Professional,
-  step3Clinic,
-  step4Documents,
-  step5Bank,
+  step3Documents,
+  step4Bank,
   getProfile,
   updateCallStatus,
 };

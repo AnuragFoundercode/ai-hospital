@@ -14,13 +14,13 @@ const { registerClient } = require('../../events/sse');
 // Public routes
 router.post('/send-otp', doctorController.sendOtp);
 router.post('/verify-otp', doctorController.verifyOtp);
+router.get('/categories', doctorController.getCategories);
 
-// Registration steps (token required)
-router.put('/registration/step1', doctorAuth, doctorController.step1Personal);
-router.put('/registration/step2', doctorAuth, doctorController.step2Professional);
-router.put('/registration/step3', doctorAuth, doctorController.step3Clinic);
-router.put('/registration/step4', doctorAuth, doctorController.step4Documents);
-router.put('/registration/step5', doctorAuth, doctorController.step5Bank);
+// Registration steps (token required) - vendor-style 4-step flow
+router.put('/registration/step1', doctorAuth, doctorController.step1Personal); // personal
+router.put('/registration/step2', doctorAuth, doctorController.step2Professional); // professional
+router.put('/registration/step3', doctorAuth, doctorController.step3Documents); // documents
+router.put('/registration/step4', doctorAuth, doctorController.step4Bank); // bank -> submit
 
 // Profile (token required)
 router.get('/profile', doctorAuth, doctorController.getProfile);

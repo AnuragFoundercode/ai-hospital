@@ -142,7 +142,7 @@ const selectRole = async (req, res) => {
 
     if (role === 'doctor') {
       const uuid = uuidv4();
-      await pool.query("INSERT INTO doctors (uuid, full_name, mobile, registration_number, qualification) VALUES (?, '', ?, '', '')", [uuid, mobile]);
+      await pool.query("INSERT INTO doctors (uuid, full_name, mobile) VALUES (?, '', ?)", [uuid, mobile]);
       const [rows] = await pool.query('SELECT * FROM doctors WHERE mobile = ?', [mobile]);
       if (fcm_token) await pool.query('UPDATE doctors SET fcm_token = ? WHERE id = ?', [fcm_token, rows[0].id]);
       const token = jwt.sign({ id: rows[0].id, uuid: rows[0].uuid, role: 'doctor' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });

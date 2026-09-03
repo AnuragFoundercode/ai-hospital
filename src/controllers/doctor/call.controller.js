@@ -4,8 +4,8 @@ const walletModel = require('../../models/doctor/wallet.model');
 const notificationService = require('../../services/notification.service');
 const { sendToClient } = require('../../events/sse');
 
-// Admin commission % on doctor call earnings (0 = doctor gets full)
-const ADMIN_COMMISSION_PERCENT = 0;
+// Fallback admin commission % if a doctor has none set
+const DEFAULT_ADMIN_COMMISSION_PERCENT = 15;
 
 const genCallId = () => `CALL-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
@@ -226,7 +226,14 @@ async function endCallInternal(call, endedBy, reason) {
   // Latest totals
   const [fresh] = await pool.query('SELECT total_minutes, total_charged FROM doctor_calls WHERE id = ?', [call.id]);
   const totalCharged = parseFloat(fresh[0].total_charged);
-  const commission = +(totalCharged * (ADMIN_COMMISSION_PERCENT / 100)).toFixed(2);
+
+  // Per-doctor admin commission %
+  const [docRow] = await pool.query('SELECT admin_commission_percent FROM doctors WHERE id = ?', [call.doctor_id]);
+  const commissionPercent = docRow[0]?.admin_commission_percent != null
+    ? parseFloat(docRow[0].admin_commission_percent)
+    : DEFAULT_ADMIN_COMMISSION_PERCENT;
+
+  const commission = +(totalCharged * (commissionPercent / 100)).toFixed(2);
   const doctorEarning = +(totalCharged - commission).toFixed(2);
 
   await pool.query(
@@ -245,9 +252,9 @@ async function endCallInternal(call, endedBy, reason) {
 
   // Notify both sides
   sendToClient(`user_${call.user_id}`, 'call_ended', { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, total_charged: totalCharged, reason });
-  sendToClient(`doctor_${call.doctor_id}`, 'call_ended', { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, doctor_earning: doctorEarning, reason });
+  sendToClient(`doctor_${call.doctor_id}`, 'call_ended', { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, doctor_earning: doctorEarning, admin_commission: commission, reason });
 
-  return { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, total_charged: totalCharged, doctor_earning: doctorEarning };
+  return { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, total_charged: totalCharged, admin_commission_percent: commissionPercent, admin_commission: commission, doctor_earning: doctorEarning };
 }
 
 // ═══════════════════════════════════════════
