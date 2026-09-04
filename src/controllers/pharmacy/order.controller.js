@@ -120,7 +120,7 @@ const updateOrderStatus = async (req, res) => {
     const { status } = req.body;
     const validTransitions = { accepted: ['packing'], packing: ['ready'], ready: ['out_for_delivery'], out_for_delivery: ['delivered'] };
 
-    const [rows] = await pool.query('SELECT id, status as current_status, user_id, pharmacy_id, final_amount, payment_method FROM pharmacy_orders WHERE order_id = ? AND pharmacy_id = ?', [req.params.order_id, req.pharmacy.id]);
+    const [rows] = await pool.query('SELECT id, status as current_status, user_id, pharmacy_id, final_amount, delivery_charge, delivery_distance_km, payment_method FROM pharmacy_orders WHERE order_id = ? AND pharmacy_id = ?', [req.params.order_id, req.pharmacy.id]);
     if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
 
     const order = rows[0];
@@ -143,21 +143,32 @@ const updateOrderStatus = async (req, res) => {
           const dropLat = parseFloat(deliveryAddress.latitude || 0);
           const dropLng = parseFloat(deliveryAddress.longitude || 0);
 
-          // Haversine distance
-          const R = 6371;
-          const dLat = (dropLat - pickupLat) * Math.PI / 180;
-          const dLon = (dropLng - pickupLng) * Math.PI / 180;
-          const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pickupLat*Math.PI/180)*Math.cos(dropLat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
-          const distanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
           const [configRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'delivery_per_km_charge'");
           const perKmCharge = configRows.length ? parseFloat(configRows[0].config_value) : 12;
-          const deliveryEarning = parseFloat((distanceKm * perKmCharge).toFixed(2));
+
+          // Delivery fee = what the user actually paid (stored on the order, distance-based).
+          // Fallback to distance*rate only if the order has no stored fee.
+          let distanceKm = parseFloat(order.delivery_distance_km) || 0;
+          let deliveryFee = parseFloat(order.delivery_charge) || 0;
+          if (deliveryFee <= 0) {
+            const R = 6371;
+            const dLat = (dropLat - pickupLat) * Math.PI / 180;
+            const dLon = (dropLng - pickupLng) * Math.PI / 180;
+            const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pickupLat*Math.PI/180)*Math.cos(dropLat*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+            distanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            deliveryFee = parseFloat((distanceKm * perKmCharge).toFixed(2));
+          }
+
+          // Commission is deducted per delivery-partner at ACCEPT time (each partner has
+          // their own admin_commission_percent). At 'ready' we only know the gross fee.
+          // Show the full fee as the estimated earning until a partner accepts.
+          const deliveryEarning = deliveryFee;
+
           const requestId = `DEL-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
           await pool.query(
-            "INSERT INTO delivery_requests (request_id, order_id, pharmacy_id, pickup_address, pickup_latitude, pickup_longitude, drop_address, drop_latitude, drop_longitude, distance_km, per_km_charge, delivery_earning, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching')",
-            [requestId, order.id, order.pharmacy_id, `${pharmacyRows[0].address_line1}, ${pharmacyRows[0].city}`, pickupLat, pickupLng, `${deliveryAddress.address_line1 || ''}, ${deliveryAddress.city || ''}`, dropLat, dropLng, distanceKm.toFixed(2), perKmCharge, deliveryEarning]
+            "INSERT INTO delivery_requests (request_id, order_id, pharmacy_id, pickup_address, pickup_latitude, pickup_longitude, drop_address, drop_latitude, drop_longitude, distance_km, per_km_charge, delivery_fee, delivery_earning, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching')",
+            [requestId, order.id, order.pharmacy_id, `${pharmacyRows[0].address_line1}, ${pharmacyRows[0].city}`, pickupLat, pickupLng, `${deliveryAddress.address_line1 || ''}, ${deliveryAddress.city || ''}`, dropLat, dropLng, distanceKm.toFixed(2), perKmCharge, deliveryFee, deliveryEarning]
           );
 
           // Notify nearby delivery partners

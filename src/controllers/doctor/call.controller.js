@@ -423,6 +423,68 @@ const getCallDetail = async (req, res) => {
   } catch (error) { console.error('getCallDetail error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
+/**
+ * GET /api/v1/user/doctor/:id/calls?page=1&limit=20
+ * How many times the logged-in user consulted a specific doctor + history (with call_id).
+ * :id = doctor uuid
+ */
+const getUserDoctorCallHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params; // doctor uuid
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Resolve doctor by uuid
+    const [docRows] = await pool.query(
+      `SELECT d.id, d.uuid, d.full_name, d.profile_photo, dc.name as category
+       FROM doctors d LEFT JOIN doctor_categories dc ON d.category_id = dc.id
+       WHERE d.uuid = ?`,
+      [id]
+    );
+    if (!docRows.length) return res.status(404).json({ message: 'Doctor not found.' });
+    const doctor = docRows[0];
+
+    // Total consultations (completed/ended calls) + overall count
+    const [count] = await pool.query(
+      'SELECT COUNT(*) as total FROM doctor_calls WHERE user_id = ? AND doctor_id = ?',
+      [userId, doctor.id]
+    );
+    const [completedCount] = await pool.query(
+      "SELECT COUNT(*) as total FROM doctor_calls WHERE user_id = ? AND doctor_id = ? AND status = 'ended'",
+      [userId, doctor.id]
+    );
+
+    const [rows] = await pool.query(
+      `SELECT call_id, status, per_minute_fee, total_minutes, total_charged, started_at, ended_at, created_at
+       FROM doctor_calls
+       WHERE user_id = ? AND doctor_id = ?
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [userId, doctor.id, parseInt(limit), offset]
+    );
+
+    return res.status(200).json({
+      message: 'Consultation history fetched.',
+      data: {
+        doctor: { id: doctor.uuid, name: doctor.full_name, photo: doctor.profile_photo, category: doctor.category },
+        total_consultations: count[0].total,
+        completed_consultations: completedCount[0].total,
+        history: rows.map(c => ({
+          call_id: c.call_id,
+          status: c.status,
+          per_minute_fee: c.per_minute_fee,
+          total_minutes: c.total_minutes,
+          total_charged: c.total_charged,
+          started_at: c.started_at,
+          ended_at: c.ended_at,
+          created_at: c.created_at,
+        })),
+      },
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: count[0].total, total_pages: Math.ceil(count[0].total / parseInt(limit)) },
+    });
+  } catch (error) { console.error('getUserDoctorCallHistory error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
 module.exports = {
   startCall,
   tickCall,
@@ -431,6 +493,7 @@ module.exports = {
   endCall,
   getDoctorCallHistory,
   getUserCallHistory,
+  getUserDoctorCallHistory,
   uploadUserReports,
   uploadPrescription,
   getCallDetail,

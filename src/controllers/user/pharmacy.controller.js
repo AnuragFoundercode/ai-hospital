@@ -1,10 +1,37 @@
 const { pool } = require('../../config/database');
 const paytmService = require('../../services/paytm.service');
 const paytmConfig = require('../../config/paytm');
+const distanceService = require('../../services/distance.service');
 
 // ─────────────────────────────────────────────
 // USER PHARMACY CONTROLLER
 // ─────────────────────────────────────────────
+
+// Global per-km delivery rate (admin_config.delivery_per_km_charge), cached lightly
+const getPerKmCharge = async () => {
+  const [rows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'delivery_per_km_charge'");
+  return rows.length ? parseFloat(rows[0].config_value) : 12;
+};
+
+/**
+ * Distance-based delivery fee = per_km_rate * distance_km (pharmacy -> drop).
+ * Returns { fee, distance_km, per_km }. If coords missing, distance 0 -> fee 0.
+ */
+const computeDeliveryFee = async (pharmacy, dropLat, dropLng) => {
+  const perKm = await getPerKmCharge();
+  const pLat = parseFloat(pharmacy.latitude);
+  const pLng = parseFloat(pharmacy.longitude);
+  const dLat = parseFloat(dropLat);
+  const dLng = parseFloat(dropLng);
+
+  if (!pLat || !pLng || !dLat || !dLng) {
+    return { fee: 0, distance_km: 0, per_km: perKm };
+  }
+
+  const { distance_km } = await distanceService.getDistance(pLat, pLng, dLat, dLng);
+  const fee = parseFloat((distance_km * perKm).toFixed(2));
+  return { fee, distance_km, per_km: perKm };
+};
 
 const getCategories = async (req, res) => {
   try {
@@ -135,10 +162,32 @@ const getCart = async (req, res) => {
     });
 
     const discountAmount = mrpTotal - baseAmount;
-    const deliveryCharge = baseAmount >= parseFloat(items[0].free_delivery_above) ? 0 : parseFloat(items[0].delivery_charge);
+
+    // Distance-based delivery preview.
+    // Use the address_id passed in query; else fall back to the user's default address
+    // so the cart shows an estimated delivery fee even before the user picks an address.
+    let deliveryCharge = 0;
+    let deliveryDistanceKm = 0;
+    const { address_id } = req.query;
+
+    let addrRows;
+    if (address_id) {
+      [addrRows] = await pool.query('SELECT latitude, longitude FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+    } else {
+      [addrRows] = await pool.query('SELECT latitude, longitude FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, id ASC LIMIT 1', [userId]);
+    }
+
+    if (addrRows.length && addrRows[0].latitude && addrRows[0].longitude) {
+      const [pharmacyRows] = await pool.query('SELECT latitude, longitude FROM pharmacies WHERE id = (SELECT pharmacy_id FROM pharmacy_cart WHERE user_id = ? LIMIT 1)', [userId]);
+      if (pharmacyRows.length) {
+        const calc = await computeDeliveryFee(pharmacyRows[0], addrRows[0].latitude, addrRows[0].longitude);
+        deliveryCharge = calc.fee;
+        deliveryDistanceKm = calc.distance_km;
+      }
+    }
     const finalAmount = baseAmount + deliveryCharge;
 
-    return res.status(200).json({ message: 'Cart fetched.', data: { pharmacy: { id: items[0].pharmacy_uuid, name: items[0].pharmacy_name }, items: cartItems, prescription_required: prescriptionRequired, summary: { total_items: cartItems.length, mrp_total: mrpTotal.toFixed(2), base_amount: baseAmount.toFixed(2), discount_amount: discountAmount.toFixed(2), delivery_charge: deliveryCharge.toFixed(2), final_amount: finalAmount.toFixed(2) } } });
+    return res.status(200).json({ message: 'Cart fetched.', data: { pharmacy: { id: items[0].pharmacy_uuid, name: items[0].pharmacy_name }, items: cartItems, prescription_required: prescriptionRequired, summary: { total_items: cartItems.length, mrp_total: mrpTotal.toFixed(2), base_amount: baseAmount.toFixed(2), discount_amount: discountAmount.toFixed(2), delivery_charge: deliveryCharge.toFixed(2), delivery_distance_km: deliveryDistanceKm, final_amount: finalAmount.toFixed(2) } } });
   } catch (error) { console.error('pharmacy getCart error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
@@ -195,17 +244,35 @@ const createOrder = async (req, res) => {
 
     if (prescriptionRequired && !prescription_url) return res.status(400).json({ message: 'Prescription required for one or more medicines. Upload prescription_url.' });
 
-    // Delivery charge
-    const [pharmacy] = await pool.query('SELECT delivery_charge, free_delivery_above FROM pharmacies WHERE id = ?', [pharmacyId]);
-    const deliveryCharge = baseAmount >= parseFloat(pharmacy[0].free_delivery_above) ? 0 : parseFloat(pharmacy[0].delivery_charge);
+    // Zone check: the chosen delivery address must fall within the pharmacy's serviceable zone.
+    // (User may have browsed with one address but picked a different-zone address at checkout.)
+    const [pharmacyZone] = await pool.query('SELECT zone_id FROM pharmacies WHERE id = ?', [pharmacyId]);
+    const pharmacyZoneId = pharmacyZone[0]?.zone_id;
+    if (pharmacyZoneId) {
+      const [zoneRows] = await pool.query('SELECT pincodes FROM zones WHERE id = ? AND is_active = 1', [pharmacyZoneId]);
+      if (!zoneRows.length) {
+        return res.status(400).json({ message: 'This pharmacy is not serviceable right now.' });
+      }
+      const pincodes = typeof zoneRows[0].pincodes === 'string' ? JSON.parse(zoneRows[0].pincodes) : zoneRows[0].pincodes;
+      const addressPincode = String(delivery_address.pincode || '');
+      if (!Array.isArray(pincodes) || !pincodes.map(String).includes(addressPincode)) {
+        return res.status(400).json({ message: 'This pharmacy does not deliver to the selected address. Please choose an address within the serviceable area.' });
+      }
+    }
+
+    // Delivery charge = distance-based (per_km_rate * distance from pharmacy to drop)
+    const [pharmacy] = await pool.query('SELECT latitude, longitude FROM pharmacies WHERE id = ?', [pharmacyId]);
+    const { fee: deliveryCharge, distance_km: deliveryDistanceKm } = await computeDeliveryFee(
+      pharmacy[0], delivery_address.latitude, delivery_address.longitude
+    );
     const finalAmount = baseAmount + deliveryCharge;
     const discountAmount = mrpTotal - baseAmount;
 
     const orderId = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     await pool.query(
-      `INSERT INTO pharmacy_orders (order_id, user_id, pharmacy_id, status, items, total_items, prescription_url, prescription_required, base_amount, discount_amount, delivery_charge, final_amount, payment_method, payment_status, delivery_address, remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)`,
-      [orderId, userId, pharmacyId, payment_method === 'cod' ? 'pending' : 'pending', JSON.stringify(items), items.length, prescription_url || null, prescriptionRequired ? 1 : 0, baseAmount, discountAmount, deliveryCharge, finalAmount, payment_method, JSON.stringify(delivery_address), remark || null]
+      `INSERT INTO pharmacy_orders (order_id, user_id, pharmacy_id, status, items, total_items, prescription_url, prescription_required, base_amount, discount_amount, delivery_charge, delivery_distance_km, final_amount, payment_method, payment_status, delivery_address, remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)`,
+      [orderId, userId, pharmacyId, payment_method === 'cod' ? 'pending' : 'pending', JSON.stringify(items), items.length, prescription_url || null, prescriptionRequired ? 1 : 0, baseAmount, discountAmount, deliveryCharge, deliveryDistanceKm, finalAmount, payment_method, JSON.stringify(delivery_address), remark || null]
     );
 
     // Clear cart
@@ -216,7 +283,7 @@ const createOrder = async (req, res) => {
     sendToClient(`pharmacy_${pharmacyId}`, 'new_order', { order_id: orderId, total_items: items.length, amount: finalAmount, payment_method });
 
     if (payment_method === 'cod') {
-      return res.status(201).json({ message: 'Order placed! Pay on delivery.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, total: finalAmount }, payment_method: 'cod', status: 'pending', payment: null } });
+      return res.status(201).json({ message: 'Order placed! Pay on delivery.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, delivery_distance_km: deliveryDistanceKm, total: finalAmount }, payment_method: 'cod', status: 'pending', payment: null } });
     }
 
     // Online → Paytm
@@ -227,7 +294,7 @@ const createOrder = async (req, res) => {
       else { paytmData = { txn_token: null, order_id: orderId, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), error: paytmResponse.body?.resultInfo?.resultMsg || 'Failed' }; }
     } catch (e) { paytmData = { txn_token: null, order_id: orderId, error: e.message }; }
 
-    return res.status(201).json({ message: 'Order created. Complete payment.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, total: finalAmount }, payment_method: 'online', status: 'pending', payment: paytmData } });
+    return res.status(201).json({ message: 'Order created. Complete payment.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, delivery_distance_km: deliveryDistanceKm, total: finalAmount }, payment_method: 'online', status: 'pending', payment: paytmData } });
   } catch (error) { console.error('pharmacy createOrder error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 

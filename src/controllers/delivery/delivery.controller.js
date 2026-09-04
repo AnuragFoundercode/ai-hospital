@@ -358,10 +358,27 @@ const acceptDelivery = async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM delivery_requests WHERE id = ? AND status = 'searching'", [id]);
     if (!rows.length) return res.status(404).json({ message: 'Request not found or already assigned.' });
 
-    await pool.query("UPDATE delivery_requests SET partner_id = ?, status = 'assigned', assigned_at = NOW() WHERE id = ?", [partnerId, id]);
-    await pool.query('UPDATE pharmacy_orders SET delivery_partner_id = ?, delivery_request_id = ? WHERE id = ?', [partnerId, id, rows[0].order_id]);
+    const request = rows[0];
 
-    return res.status(200).json({ message: 'Delivery accepted!', data: { status: 'assigned' } });
+    // Delivery fee for this trip (distance-based, set when order became 'ready')
+    const deliveryFee = parseFloat(request.delivery_fee) || parseFloat(request.delivery_earning) || 0;
+
+    // Deduct THIS partner's admin commission % from the delivery fee → net earning
+    const [partnerRows] = await pool.query('SELECT admin_commission_percent FROM delivery_partners WHERE id = ?', [partnerId]);
+    const commissionPercent = partnerRows[0]?.admin_commission_percent != null ? parseFloat(partnerRows[0].admin_commission_percent) : 2;
+    const adminCommission = parseFloat((deliveryFee * (commissionPercent / 100)).toFixed(2));
+    const netEarning = parseFloat((deliveryFee - adminCommission).toFixed(2));
+
+    await pool.query(
+      "UPDATE delivery_requests SET partner_id = ?, status = 'assigned', assigned_at = NOW(), delivery_fee = ?, admin_commission_percent = ?, admin_commission = ?, delivery_earning = ? WHERE id = ?",
+      [partnerId, deliveryFee, commissionPercent, adminCommission, netEarning, id]
+    );
+    await pool.query('UPDATE pharmacy_orders SET delivery_partner_id = ?, delivery_request_id = ?, delivery_partner_earning = ?, delivery_admin_commission = ? WHERE id = ?', [partnerId, id, netEarning, adminCommission, request.order_id]);
+
+    return res.status(200).json({
+      message: 'Delivery accepted!',
+      data: { status: 'assigned', delivery_fee: deliveryFee, admin_commission_percent: commissionPercent, admin_commission: adminCommission, your_earning: netEarning },
+    });
   } catch (error) {
     console.error('delivery accept error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });
@@ -441,6 +458,7 @@ const markDelivered = async (req, res) => {
     if (!otp) return res.status(400).json({ message: 'Delivery OTP required.' });
 
     const [rows] = await pool.query("SELECT dr.*, po.pharmacy_id, po.user_id, po.final_amount, po.payment_method FROM delivery_requests dr JOIN pharmacy_orders po ON dr.order_id = po.id WHERE dr.id = ? AND dr.partner_id = ?", [req.params.id, req.delivery.id]);
+    // dr.* includes delivery_fee, admin_commission, admin_commission_percent, delivery_earning (net)
     if (!rows.length) return res.status(404).json({ message: 'Delivery not found.' });
     if (rows[0].status !== 'reached') return res.status(400).json({ message: `Cannot mark delivered. Current: ${rows[0].status}` });
 
@@ -467,7 +485,8 @@ const markDelivered = async (req, res) => {
     // Credit wallet
     await pool.query('UPDATE delivery_wallets SET balance = balance + ?, total_earned = total_earned + ? WHERE delivery_partner_id = ?', [delivery.delivery_earning, delivery.delivery_earning, req.delivery.id]);
     const [walletRow] = await pool.query('SELECT balance FROM delivery_wallets WHERE delivery_partner_id = ?', [req.delivery.id]);
-    await pool.query("INSERT INTO delivery_wallet_transactions (delivery_partner_id, type, amount, description, reference_type, reference_id, balance_after) VALUES (?, 'credit', ?, ?, 'delivery_earning', ?, ?)", [req.delivery.id, delivery.delivery_earning, `Delivery ${delivery.request_id} completed. Distance: ${delivery.distance_km} km`, delivery.id, walletRow[0].balance]);
+    const dpCommission = parseFloat(delivery.admin_commission) || 0;
+    await pool.query("INSERT INTO delivery_wallet_transactions (delivery_partner_id, type, amount, description, reference_type, reference_id, admin_commission, balance_after) VALUES (?, 'credit', ?, ?, 'delivery_earning', ?, ?, ?)", [req.delivery.id, delivery.delivery_earning, `Delivery ${delivery.request_id} completed. Fee: ₹${delivery.delivery_fee}, commission: ₹${dpCommission.toFixed(2)}, distance: ${delivery.distance_km} km`, delivery.id, dpCommission, walletRow[0].balance]);
 
     // Credit pharmacy wallet (order amount - admin commission)
     const [pharmacy] = await pool.query('SELECT admin_commission_percent FROM pharmacies WHERE id = ?', [delivery.pharmacy_id]);
@@ -486,7 +505,7 @@ const markDelivered = async (req, res) => {
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [delivery.user_id]);
     if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Order Delivered! 🎉', 'Your medicine has been delivered.', { type: 'delivery_completed' });
 
-    return res.status(200).json({ message: 'Delivery completed!', data: { status: 'delivered', earning: delivery.delivery_earning } });
+    return res.status(200).json({ message: 'Delivery completed!', data: { status: 'delivered', delivery_fee: delivery.delivery_fee, admin_commission: dpCommission, earning: delivery.delivery_earning } });
   } catch (error) {
     console.error('delivery markDelivered error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });

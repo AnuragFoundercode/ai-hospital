@@ -49,6 +49,7 @@ router.post('/call/:call_id/end', userAuth, callController.endCall);
 router.post('/call/:call_id/reports', userAuth, callController.uploadUserReports);
 router.get('/call/:call_id', userAuth, callController.getCallDetail);
 router.get('/calls', userAuth, callController.getUserCallHistory);
+router.get('/doctor/:id/calls', userAuth, callController.getUserDoctorCallHistory);
 
 // Booking APIs (token required)
 router.post('/booking/lab', userAuth, bookingController.createLabBooking);
@@ -68,6 +69,7 @@ router.post('/booking/paytm/callback', bookingController.paytmCallback);
 // Lab APIs (token required)
 router.get('/lab-test-categories', userAuth, labController.getTestCategories);
 router.get('/lab-tests', userAuth, labController.searchTests);
+router.get('/search-lab-tests', userAuth, labController.searchLabTests);
 router.get('/lab-test/:id', userAuth, labController.getTestDetail);
 router.get('/labs', userAuth, labController.getLabList);
 router.get('/lab/:id', userAuth, labController.getLabDetail);

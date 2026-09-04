@@ -352,11 +352,97 @@ const getLabBookingDetail = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/search-lab-tests?search=cbc&pincode=226001
+ * Search tests by name, return which labs in the user's zone offer it (with price + pricing_id).
+ * Works like /search-medicines but for lab tests.
+ */
+const searchLabTests = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const { search, pincode } = req.query;
+    if (!search || search.trim().length < 2) {
+      return res.status(400).json({ message: 'search (min 2 chars) required.' });
+    }
+
+    // Zone filter from pincode
+    let zoneFilter = '';
+    let zoneParams = [];
+    if (pincode) {
+      const [zoneRows] = await pool.query("SELECT id FROM zones WHERE is_active = 1 AND JSON_CONTAINS(pincodes, ?)", [JSON.stringify(pincode)]);
+      if (zoneRows.length) {
+        zoneFilter = 'AND pl.zone_id = ?';
+        zoneParams = [zoneRows[0].id];
+      } else {
+        return res.status(200).json({ message: 'No service available in this pincode.', data: [] });
+      }
+    }
+
+    const [rows] = await pool.query(
+      `SELECT ltp.id AS pricing_id, ltp.price, ltp.discount_percent, ltp.report_delivery_hours, ltp.is_available,
+              lt.id AS test_id, lt.name AS test_name, lt.test_code, lt.sample_type, ltc.name AS category_name,
+              pl.uuid AS lab_uuid, pl.name AS lab_name, pl.profile_photo AS lab_photo, pl.city AS lab_city,
+              pl.pincode AS lab_pincode, pl.average_rating AS lab_rating, pl.home_collection_available
+       FROM lab_test_pricing ltp
+       JOIN lab_tests lt ON ltp.test_id = lt.id
+       JOIN pathology_labs pl ON ltp.pathology_lab_id = pl.id
+       LEFT JOIN lab_test_categories ltc ON lt.category_id = ltc.id
+       WHERE (lt.name LIKE ? OR lt.test_code LIKE ?) AND ltp.is_available = 1
+             AND pl.is_active = 1 AND pl.is_verified = 1 ${zoneFilter}
+       ORDER BY lt.name ASC, ltp.price ASC
+       LIMIT 100`,
+      [`%${search}%`, `%${search}%`, ...zoneParams]
+    );
+
+    // Group by test → list of labs that offer it (with price + pricing_id)
+    const testMap = {};
+    for (const r of rows) {
+      const price = parseFloat(r.price);
+      const discount = price * (parseFloat(r.discount_percent) / 100);
+      const finalPrice = parseFloat((price - discount).toFixed(2));
+
+      if (!testMap[r.test_id]) {
+        testMap[r.test_id] = {
+          test_id: r.test_id,
+          name: r.test_name,
+          test_code: r.test_code,
+          sample_type: r.sample_type,
+          category: r.category_name,
+          available_at: [],
+        };
+      }
+      testMap[r.test_id].available_at.push({
+        pricing_id: r.pricing_id,
+        lab_id: r.lab_uuid,
+        lab_name: r.lab_name,
+        lab_photo: r.lab_photo,
+        lab_city: r.lab_city,
+        lab_pincode: r.lab_pincode,
+        lab_rating: r.lab_rating,
+        home_collection: r.home_collection_available,
+        price: price,
+        discount_percent: r.discount_percent,
+        final_price: finalPrice,
+        report_delivery_hours: r.report_delivery_hours,
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Tests fetched.',
+      data: Object.values(testMap),
+    });
+  } catch (error) {
+    console.error('searchLabTests error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getLabList,
   getLabDetail,
   getTestCategories,
   searchTests,
+  searchLabTests,
   getTestDetail,
   getLabBookings,
   getLabBookingDetail,

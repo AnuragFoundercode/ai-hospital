@@ -6,6 +6,7 @@ const paytmConfig = require('../../config/paytm');
 const bookingNotification = require('../../services/booking.notification');
 const { pool } = require('../../config/database');
 const { sendToLab, sendToDoctor, sendToClient } = require('../../events/sse');
+const distanceService = require('../../services/distance.service');
 
 // ─────────────────────────────────────────────
 // BOOKING CONTROLLER - For patient app
@@ -637,7 +638,56 @@ const createLabBooking = async (req, res) => {
       testsBooked.push({ id: tp.test_id, name: tp.test_name, price, discount });
     }
 
-    const finalAmount = baseAmount - totalDiscount;
+    const isHomeCollection = (collection_type || 'home') === 'home';
+
+    // ── Home collection: validate address + compute distance-based collection fee ──
+    let collectionCharge = 0;
+    let collectionDistanceKm = 0;
+    let deliveryAddress = null;
+
+    if (isHomeCollection) {
+      if (!address_id) {
+        return res.status(400).json({ message: 'address_id is required for home collection.' });
+      }
+      const [addrRows] = await pool.query('SELECT * FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+      if (!addrRows.length) {
+        return res.status(404).json({ message: 'Address not found.' });
+      }
+      const addr = addrRows[0];
+      deliveryAddress = {
+        name: addr.name, mobile: addr.mobile, address_line1: addr.address_line1, address_line2: addr.address_line2,
+        landmark: addr.landmark, city: addr.city, state: addr.state, pincode: addr.pincode,
+        latitude: addr.latitude, longitude: addr.longitude,
+      };
+
+      // Zone check: the chosen address must fall within the lab's serviceable zone.
+      if (lab.zone_id) {
+        const [zoneRows] = await pool.query('SELECT pincodes FROM zones WHERE id = ? AND is_active = 1', [lab.zone_id]);
+        if (!zoneRows.length) {
+          return res.status(400).json({ message: 'This lab is not serviceable right now.' });
+        }
+        const pincodes = typeof zoneRows[0].pincodes === 'string' ? JSON.parse(zoneRows[0].pincodes) : zoneRows[0].pincodes;
+        const addressPincode = String(addr.pincode || '');
+        if (!Array.isArray(pincodes) || !pincodes.map(String).includes(addressPincode)) {
+          return res.status(400).json({ message: 'This lab does not offer home collection at the selected address. Please choose an address within the serviceable area.' });
+        }
+      }
+
+      // Distance-based collection fee = sample_collection_per_km_charge * distance (lab -> address)
+      const [cfgRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'sample_collection_per_km_charge'");
+      const perKm = cfgRows.length ? parseFloat(cfgRows[0].config_value) : 15;
+      const labLat = parseFloat(lab.latitude);
+      const labLng = parseFloat(lab.longitude);
+      const aLat = parseFloat(addr.latitude);
+      const aLng = parseFloat(addr.longitude);
+      if (labLat && labLng && aLat && aLng) {
+        const { distance_km } = await distanceService.getDistance(labLat, labLng, aLat, aLng);
+        collectionDistanceKm = distance_km;
+        collectionCharge = parseFloat((distance_km * perKm).toFixed(2));
+      }
+    }
+
+    const finalAmount = baseAmount - totalDiscount + collectionCharge;
 
     // Create booking
     const booking = await bookingModel.create({
@@ -658,6 +708,9 @@ const createLabBooking = async (req, res) => {
         lab_name: lab.name,
         collection_type: collection_type || 'home',
         address_id: address_id || null,
+        delivery_address: deliveryAddress,
+        collection_charge: collectionCharge,
+        collection_distance_km: collectionDistanceKm,
         tests: testsBooked,
         attachments: attachments || [],
       },
@@ -719,6 +772,8 @@ const createLabBooking = async (req, res) => {
         amount: {
           base: baseAmount,
           discount: totalDiscount,
+          collection_charge: collectionCharge,
+          collection_distance_km: collectionDistanceKm,
           tax: 0,
           total: finalAmount,
         },
