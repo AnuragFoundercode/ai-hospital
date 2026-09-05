@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../../services/notification.service');
+const { notify } = require('../../services/notify');
 
 // ─────────────────────────────────────────────
 // DELIVERY PARTNER CONTROLLER
@@ -375,6 +376,23 @@ const acceptDelivery = async (req, res) => {
     );
     await pool.query('UPDATE pharmacy_orders SET delivery_partner_id = ?, delivery_request_id = ?, delivery_partner_earning = ?, delivery_admin_commission = ? WHERE id = ?', [partnerId, id, netEarning, adminCommission, request.order_id]);
 
+    // Notify user (rider assigned) + pharmacy (who's picking up)
+    const [partnerInfo] = await pool.query('SELECT full_name FROM delivery_partners WHERE id = ?', [partnerId]);
+    const riderName = partnerInfo[0]?.full_name || 'A delivery partner';
+    const [orderInfo] = await pool.query('SELECT user_id, order_id FROM pharmacy_orders WHERE id = ?', [request.order_id]);
+    if (orderInfo.length) {
+      await notify('user', orderInfo[0].user_id, {
+        title: 'Delivery Partner Assigned 🛵', body: `${riderName} will deliver your order.`,
+        type: 'order', reference_type: 'order', reference_id: request.order_id,
+        data: { event: 'rider_assigned', order_id: orderInfo[0].order_id },
+      });
+    }
+    await notify('pharmacy', request.pharmacy_id, {
+      title: 'Rider Assigned 🛵', body: `${riderName} is coming to pick up order ${request.request_id}.`,
+      type: 'order', reference_type: 'order', reference_id: request.order_id,
+      data: { event: 'rider_assigned', request_id: request.request_id },
+    });
+
     return res.status(200).json({
       message: 'Delivery accepted!',
       data: { status: 'assigned', delivery_fee: deliveryFee, admin_commission_percent: commissionPercent, admin_commission: adminCommission, your_earning: netEarning },
@@ -408,9 +426,12 @@ const markPickedUp = async (req, res) => {
     await pool.query("UPDATE pharmacy_orders SET status = 'out_for_delivery', dispatched_at = NOW() WHERE id = ?", [rows[0].order_id]);
 
     // Notify user
-    const [orderRows] = await pool.query('SELECT user_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [orderRows[0].user_id]);
-    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Order Picked Up 🛵', 'Your medicine order is on its way!', { type: 'delivery_picked_up' });
+    const [orderRows] = await pool.query('SELECT user_id, order_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
+    await notify('user', orderRows[0].user_id, {
+      title: 'Order Picked Up 🛵', body: 'Your medicine order is on its way!',
+      type: 'order', reference_type: 'order', reference_id: rows[0].order_id,
+      data: { event: 'delivery_picked_up', order_id: orderRows[0].order_id },
+    });
 
     return res.status(200).json({ message: 'Marked as picked up.', data: { status: 'picked_up' } });
   } catch (error) {
@@ -437,9 +458,12 @@ const markReached = async (req, res) => {
     await pool.query("UPDATE pharmacy_orders SET status = 'reached' WHERE id = ?", [rows[0].order_id]);
 
     // Notify user with OTP
-    const [orderRows] = await pool.query('SELECT user_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [orderRows[0].user_id]);
-    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Delivery Partner Arrived 🏠', `Your order has arrived! Delivery OTP: ${deliveryOtp}`, { type: 'delivery_reached', delivery_otp: deliveryOtp });
+    const [orderRows] = await pool.query('SELECT user_id, order_id FROM pharmacy_orders WHERE id = ?', [rows[0].order_id]);
+    await notify('user', orderRows[0].user_id, {
+      title: 'Delivery Partner Arrived 🏠', body: `Your order has arrived! Delivery OTP: ${deliveryOtp}`,
+      type: 'order', reference_type: 'order', reference_id: rows[0].order_id,
+      data: { event: 'delivery_reached', order_id: orderRows[0].order_id, delivery_otp: deliveryOtp },
+    });
 
     return res.status(200).json({ message: 'Marked as reached. OTP sent to user.', data: { status: 'reached' } });
   } catch (error) {
@@ -501,9 +525,17 @@ const markDelivered = async (req, res) => {
     const [phWallet] = await pool.query('SELECT balance FROM pharmacy_wallets WHERE pharmacy_id = ?', [delivery.pharmacy_id]);
     await pool.query("INSERT INTO pharmacy_wallet_transactions (pharmacy_id, type, amount, description, reference_type, reference_id, admin_commission, balance_after) VALUES (?, 'credit', ?, ?, 'order_fee', ?, ?, ?)", [delivery.pharmacy_id, pharmacyEarning, `Order delivered. Commission: ₹${adminCommission.toFixed(2)}`, delivery.order_id, adminCommission, phWallet[0].balance]);
 
-    // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [delivery.user_id]);
-    if (userRows[0]?.fcm_token) await notificationService.sendToDevice(userRows[0].fcm_token, 'Order Delivered! 🎉', 'Your medicine has been delivered.', { type: 'delivery_completed' });
+    // Notify user + pharmacy that the order was delivered
+    await notify('user', delivery.user_id, {
+      title: 'Order Delivered! 🎉', body: 'Your medicine has been delivered.',
+      type: 'order', reference_type: 'order', reference_id: delivery.order_id,
+      data: { event: 'delivery_completed', request_id: delivery.request_id },
+    });
+    await notify('pharmacy', delivery.pharmacy_id, {
+      title: 'Order Delivered ✅', body: `Order ${delivery.request_id} has been delivered. ₹${parseFloat(delivery.final_amount).toFixed(2)} credited (less commission).`,
+      type: 'order', reference_type: 'order', reference_id: delivery.order_id,
+      data: { event: 'order_delivered', request_id: delivery.request_id },
+    });
 
     return res.status(200).json({ message: 'Delivery completed!', data: { status: 'delivered', delivery_fee: delivery.delivery_fee, admin_commission: dpCommission, earning: delivery.delivery_earning } });
   } catch (error) {

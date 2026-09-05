@@ -6,51 +6,99 @@ const doctorCategoryModel = require('../../models/user/doctorCategory.model');
 // ─────────────────────────────────────────────
 
 /**
+ * Shared: build the doctor-list payload (same shape used by REST + SSE).
+ */
+const buildDoctorList = async (query = {}) => {
+  const { page = 1, limit = 10, category_id, min_rating, search } = query;
+
+  const result = await doctorModel.getList({
+    page: parseInt(page),
+    limit: parseInt(limit),
+    category_id: category_id ? parseInt(category_id) : null,
+    min_rating: min_rating ? parseFloat(min_rating) : null,
+    search: search || null,
+  });
+
+  const doctors = result.doctors.map((doc) => ({
+    id: doc.uuid,
+    name: doc.full_name,
+    gender: doc.gender,
+    profile_photo: doc.profile_photo,
+    rating: doc.average_rating,
+    per_minute_fee: doc.per_minute_fee,
+    call_status: doc.call_status,
+    is_online: doc.call_status === 'online',
+    qualification: doc.qualification,
+    experience_years: doc.experience_years,
+    category: doc.category_name,
+  }));
+
+  return {
+    data: doctors,
+    pagination: {
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      total_pages: Math.ceil(result.total / result.limit),
+    },
+  };
+};
+
+/**
  * GET /api/v1/user/doctors
  * Query: page, limit, category_id, min_rating, search
  */
 const getDoctorList = async (req, res) => {
   try {
-    const { page = 1, limit = 10, category_id, min_rating, search } = req.query;
-
-    const result = await doctorModel.getList({
-      page: parseInt(page),
-      limit: parseInt(limit),
-      category_id: category_id ? parseInt(category_id) : null,
-      min_rating: min_rating ? parseFloat(min_rating) : null,
-      search: search || null,
-    });
-
-    const doctors = result.doctors.map((doc) => ({
-      id: doc.uuid,
-      name: doc.full_name,
-      gender: doc.gender,
-      profile_photo: doc.profile_photo,
-      rating: doc.average_rating,
-      per_minute_fee: doc.per_minute_fee,
-      call_status: doc.call_status,
-      is_online: doc.call_status === 'online',
-      qualification: doc.qualification,
-      experience_years: doc.experience_years,
-      category: doc.category_name,
-    }));
-
-    const totalPages = Math.ceil(result.total / result.limit);
-
-    return res.status(200).json({      message: 'Doctors fetched.',
-      data: doctors,
-      pagination: {
-        page: result.page,
-        limit: result.limit,
-        total: result.total,
-        total_pages: totalPages,
-      },
-    });
+    const payload = await buildDoctorList(req.query);
+    return res.status(200).json({ message: 'Doctors fetched.', ...payload });
   } catch (error) {
     console.error('getDoctorList error:', error.message);
-    return res.status(500).json({      message: 'Something went wrong.',
-    });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
+};
+
+/**
+ * GET /api/v1/user/doctors/stream
+ * SSE: pushes the SAME doctor-list payload as GET /user/doctors, refreshed
+ * periodically so the client always has live call_status without re-fetching.
+ * Query: page, limit, category_id, min_rating, search (same as REST)
+ */
+const streamDoctorList = async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const query = { ...req.query };
+  let lastSnapshot = null;
+  let closed = false;
+
+  const pushList = async () => {
+    if (closed) return;
+    try {
+      const payload = await buildDoctorList(query);
+      // Only send when something changed (avoids spamming identical frames)
+      const snapshot = JSON.stringify(payload.data);
+      if (snapshot !== lastSnapshot) {
+        lastSnapshot = snapshot;
+        res.write(`event: doctors\ndata: ${JSON.stringify(payload)}\n\n`);
+      }
+    } catch (e) {
+      console.error('streamDoctorList error:', e.message);
+    }
+  };
+
+  // Initial push immediately, then refresh every 5s
+  await pushList();
+  const interval = setInterval(pushList, 5000);
+  const heartbeat = setInterval(() => { if (!closed) res.write(': hb\n\n'); }, 30000);
+
+  req.on('close', () => {
+    closed = true;
+    clearInterval(interval);
+    clearInterval(heartbeat);
+  });
 };
 
 /**
@@ -129,6 +177,7 @@ const getDoctorProfile = async (req, res) => {
 
 module.exports = {
   getDoctorList,
+  streamDoctorList,
   getDoctorCategories,
   getDoctorProfile,
 };

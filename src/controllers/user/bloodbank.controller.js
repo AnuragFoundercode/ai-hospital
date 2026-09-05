@@ -150,6 +150,7 @@ const getBloodBankDetail = async (req, res) => {
         email: bank.email,
         profile_photo: bank.profile_photo,
         category: bank.blood_bank_category,
+        rating: bank.average_rating,
         about_description: bank.about_description || null,
         license_number: bank.license_number,
         location: {

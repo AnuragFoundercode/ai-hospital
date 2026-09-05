@@ -1,5 +1,6 @@
 const { pool } = require('../../config/database');
 const notificationService = require('../../services/notification.service');
+const { notify } = require('../../services/notify');
 
 // ─────────────────────────────────────────────
 // PHARMACY ORDER MANAGEMENT (Vendor side)
@@ -84,8 +85,11 @@ const acceptOrder = async (req, res) => {
 
     await pool.query('UPDATE pharmacy_orders SET status = ?, accepted_at = NOW() WHERE id = ?', ['accepted', rows[0].id]);
 
-    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [rows[0].user_id]);
-    if (user[0]?.fcm_token) await notificationService.sendToDevice(user[0].fcm_token, 'Order Accepted ✅', 'Your medicine order has been accepted.', { type: 'order_accepted', order_id: req.params.order_id });
+    await notify('user', rows[0].user_id, {
+      title: 'Order Accepted ✅', body: 'Your medicine order has been accepted.',
+      type: 'order', reference_type: 'order', reference_id: rows[0].id,
+      data: { event: 'order_accepted', order_id: req.params.order_id },
+    });
 
     return res.status(200).json({ message: 'Order accepted.', data: { status: 'accepted' } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
@@ -104,8 +108,11 @@ const rejectOrder = async (req, res) => {
 
     await pool.query('UPDATE pharmacy_orders SET status = ?, rejection_reason = ?, cancelled_at = NOW() WHERE id = ?', ['rejected', reason || null, rows[0].id]);
 
-    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [rows[0].user_id]);
-    if (user[0]?.fcm_token) await notificationService.sendToDevice(user[0].fcm_token, 'Order Rejected ❌', reason || 'Your order was rejected by the pharmacy.', { type: 'order_rejected', order_id: req.params.order_id });
+    await notify('user', rows[0].user_id, {
+      title: 'Order Rejected ❌', body: reason || 'Your order was rejected by the pharmacy.',
+      type: 'order', reference_type: 'order', reference_id: rows[0].id,
+      data: { event: 'order_rejected', order_id: req.params.order_id },
+    });
 
     return res.status(200).json({ message: 'Order rejected.', data: { status: 'rejected' } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
@@ -212,8 +219,11 @@ const updateOrderStatus = async (req, res) => {
 
     // Notify user
     const statusMessages = { packing: 'Your order is being packed.', ready: 'Your order is ready for pickup/delivery.', out_for_delivery: 'Your order is out for delivery!', delivered: 'Your order has been delivered! 🎉' };
-    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [order.user_id]);
-    if (user[0]?.fcm_token) await notificationService.sendToDevice(user[0].fcm_token, `Order ${status.replace(/_/g, ' ')}`, statusMessages[status], { type: 'order_status', order_id: req.params.order_id, status });
+    await notify('user', order.user_id, {
+      title: `Order ${status.replace(/_/g, ' ')}`, body: statusMessages[status] || `Order ${status}.`,
+      type: 'order', reference_type: 'order', reference_id: order.id,
+      data: { event: 'order_status', order_id: req.params.order_id, status },
+    });
 
     return res.status(200).json({ message: `Order marked as ${status}.`, data: { status } });
   } catch (error) {

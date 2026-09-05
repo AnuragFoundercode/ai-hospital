@@ -11,6 +11,8 @@ const pharmacyController = require('../../controllers/user/pharmacy.controller')
 const ambulanceController = require('../../controllers/user/ambulance.controller');
 const callController = require('../../controllers/doctor/call.controller');
 const walletController = require('../../controllers/user/wallet.controller');
+const notificationController = require('../../controllers/notification.controller');
+const reviewController = require('../../controllers/user/review.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -34,6 +36,7 @@ router.delete('/address/:id', userAuth, userController.deleteAddress);
 // Doctor APIs (token required)
 router.get('/doctor-categories', userAuth, doctorController.getDoctorCategories);
 router.get('/doctors', userAuth, doctorController.getDoctorList);
+router.get('/doctors/stream', userAuth, doctorController.streamDoctorList);
 router.get('/doctor/:id', userAuth, doctorController.getDoctorProfile);
 
 // Wallet APIs
@@ -50,6 +53,16 @@ router.post('/call/:call_id/reports', userAuth, callController.uploadUserReports
 router.get('/call/:call_id', userAuth, callController.getCallDetail);
 router.get('/calls', userAuth, callController.getUserCallHistory);
 router.get('/doctor/:id/calls', userAuth, callController.getUserDoctorCallHistory);
+
+// Vendor reviews (any vendor: doctor|pharmacy|pathology_lab|diagnostic_center|blood_bank|ambulance_service)
+router.post('/vendor-review', userAuth, reviewController.upsertReview);
+router.get('/vendor/:type/:id/reviews', userAuth, reviewController.getVendorReviews);
+router.get('/vendor/:type/:id/my-review', userAuth, reviewController.getMyReview);
+
+// Notifications
+router.get('/notifications', userAuth, notificationController.list('user'));
+router.put('/notifications/read-all', userAuth, notificationController.markAllRead('user'));
+router.put('/notifications/:id/read', userAuth, notificationController.markRead('user'));
 
 // Booking APIs (token required)
 router.post('/booking/lab', userAuth, bookingController.createLabBooking);

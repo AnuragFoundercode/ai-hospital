@@ -5,6 +5,7 @@ const walletController = require('../../controllers/lab/wallet.controller');
 const bookingController = require('../../controllers/lab/booking.controller');
 const dashboardController = require('../../controllers/lab/dashboard.controller');
 const testController = require('../../controllers/lab/test.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const labAuth = require('../../middlewares/lab/lab.auth');
 
@@ -69,5 +70,10 @@ router.get('/events/stream', labAuth, async (req, res) => {
   );
   res.write(`event: initial\ndata: ${JSON.stringify({ pending_bookings: pending[0].count })}\n\n`);
 });
+
+// Notifications
+router.get('/notifications', labAuth, notificationController.list('pathology_lab'));
+router.put('/notifications/read-all', labAuth, notificationController.markAllRead('pathology_lab'));
+router.put('/notifications/:id/read', labAuth, notificationController.markRead('pathology_lab'));
 
 module.exports = router;

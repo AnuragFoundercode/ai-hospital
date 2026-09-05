@@ -1,5 +1,6 @@
 const { pool } = require('../../config/database');
 const notificationService = require('../../services/notification.service');
+const { notify } = require('../../services/notify');
 const { sendToClient } = require('../../events/sse');
 const walletController = require('./wallet.controller');
 
@@ -197,10 +198,11 @@ const acceptBooking = async (req, res) => {
     await pool.query("INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_type, changed_by_id, remarks) VALUES (?, ?, 'confirmed', 'provider', ?, 'Accepted')", [booking.id, booking.status, centerId]);
 
     // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    if (userRows[0]?.fcm_token) {
-      await notificationService.sendToDevice(userRows[0].fcm_token, 'Booking Confirmed ✅', 'Your diagnostic appointment has been confirmed.', { type: 'diagnostic_confirmed', booking_id });
-    }
+    await notify('user', booking.user_id, {
+      title: 'Booking Confirmed ✅', body: 'Your diagnostic appointment has been confirmed.',
+      type: 'booking', reference_type: 'booking', reference_id: booking.id,
+      data: { event: 'diagnostic_confirmed', booking_id },
+    });
 
     return res.status(200).json({ message: 'Booking accepted.', data: { booking_id, status: 'confirmed' } });
   } catch (error) {
@@ -230,10 +232,11 @@ const rejectBooking = async (req, res) => {
       await pool.query("UPDATE bookings SET payment_status = 'refund_initiated' WHERE id = ?", [booking.id]);
     }
 
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    if (userRows[0]?.fcm_token) {
-      await notificationService.sendToDevice(userRows[0].fcm_token, 'Booking Rejected ❌', `Your diagnostic booking was rejected. Reason: ${reason || 'Unavailable'}`, { type: 'diagnostic_rejected', booking_id });
-    }
+    await notify('user', booking.user_id, {
+      title: 'Booking Rejected ❌', body: `Your diagnostic booking was rejected. Reason: ${reason || 'Unavailable'}`,
+      type: 'booking', reference_type: 'booking', reference_id: booking.id,
+      data: { event: 'diagnostic_rejected', booking_id },
+    });
 
     return res.status(200).json({ message: 'Booking rejected.', data: { booking_id, status: 'cancelled' } });
   } catch (error) {
@@ -283,17 +286,19 @@ const updateStatus = async (req, res) => {
     }
 
     // Notify user on key status changes
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    if (userRows[0]?.fcm_token) {
-      const messages = {
-        scan_started: 'Your scan has started.',
-        scan_completed: 'Your scan is completed. Report will be uploaded soon.',
-        report_uploaded: 'Your report has been uploaded.',
-        completed: 'Your diagnostic appointment is completed.',
-      };
-      if (messages[status]) {
-        await notificationService.sendToDevice(userRows[0].fcm_token, 'Status Update 📋', messages[status], { type: 'diagnostic_status', booking_id, status });
-      }
+    const messages = {
+      patient_arrived: 'Marked as arrived at the center.',
+      scan_started: 'Your scan has started.',
+      scan_completed: 'Your scan is completed. Report will be uploaded soon.',
+      report_uploaded: 'Your report has been uploaded.',
+      completed: 'Your diagnostic appointment is completed.',
+    };
+    if (messages[status]) {
+      await notify('user', booking.user_id, {
+        title: 'Status Update 📋', body: messages[status],
+        type: 'booking', reference_type: 'booking', reference_id: booking.id,
+        data: { event: 'diagnostic_status', booking_id, status },
+      });
     }
 
     return res.status(200).json({ message: `Status updated to ${status}.`, data: { booking_id, status } });
@@ -329,10 +334,11 @@ const uploadReport = async (req, res) => {
     await pool.query("INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_type, changed_by_id, remarks) VALUES (?, ?, 'report_uploaded', 'provider', ?, 'Report uploaded')", [booking.id, booking.status, centerId]);
 
     // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    if (userRows[0]?.fcm_token) {
-      await notificationService.sendToDevice(userRows[0].fcm_token, 'Report Uploaded 📄', `Your diagnostic report for ${booking_id} is ready.`, { type: 'diagnostic_report', booking_id });
-    }
+    await notify('user', booking.user_id, {
+      title: 'Report Uploaded 📄', body: `Your diagnostic report for ${booking_id} is ready.`,
+      type: 'report', reference_type: 'booking', reference_id: booking.id,
+      data: { event: 'diagnostic_report', booking_id },
+    });
 
     return res.status(200).json({ message: 'Report uploaded. User notified.', data: { booking_id, reports: metadata.reports } });
   } catch (error) {

@@ -3,6 +3,7 @@ const agoraService = require('../../services/agora.service');
 const walletModel = require('../../models/doctor/wallet.model');
 const notificationService = require('../../services/notification.service');
 const { sendToClient } = require('../../events/sse');
+const { notify } = require('../../services/notify');
 
 // Fallback admin commission % if a doctor has none set
 const DEFAULT_ADMIN_COMMISSION_PERCENT = 15;
@@ -74,9 +75,13 @@ const startCall = async (req, res) => {
       patient: { name: userInfo[0]?.full_name, photo: userInfo[0]?.profile_photo },
       per_minute_fee: perMinuteFee,
     });
-    if (doctor.fcm_token) {
-      await notificationService.sendToDevice(doctor.fcm_token, 'Incoming Call 📞', `${userInfo[0]?.full_name || 'A patient'} is calling you.`, { type: 'incoming_call', call_id: callId });
-    }
+    await notify('doctor', doctor.id, {
+      title: 'Incoming Call 📞',
+      body: `${userInfo[0]?.full_name || 'A patient'} is calling you.`,
+      type: 'call', reference_type: 'call', reference_id: null, reference_code: callId,
+      data: { event: 'incoming_call', call_id: callId },
+      fcmToken: doctor.fcm_token,
+    });
 
     return res.status(201).json({
       message: 'Calling doctor...',
@@ -155,8 +160,11 @@ const acceptCall = async (req, res) => {
 
     // Notify user call accepted
     sendToClient(`user_${call.user_id}`, 'call_accepted', { call_id: call.call_id, channel_name: call.channel_name });
-    const [u] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [call.user_id]);
-    if (u[0]?.fcm_token) await notificationService.sendToDevice(u[0].fcm_token, 'Call Accepted', 'Doctor joined the call.', { type: 'call_accepted', call_id: call.call_id });
+    await notify('user', call.user_id, {
+      title: 'Call Accepted', body: 'Doctor joined the call.',
+      type: 'call', reference_type: 'call', reference_id: call.id, reference_code: call.call_id,
+      data: { event: 'call_accepted', call_id: call.call_id },
+    });
 
     return res.status(200).json({
       message: 'Call accepted.',
@@ -181,8 +189,11 @@ const rejectCall = async (req, res) => {
     await pool.query("UPDATE doctors SET call_status = 'online' WHERE id = ?", [doctorId]);
 
     sendToClient(`user_${call.user_id}`, 'call_rejected', { call_id: call.call_id });
-    const [u] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [call.user_id]);
-    if (u[0]?.fcm_token) await notificationService.sendToDevice(u[0].fcm_token, 'Call Rejected', 'Doctor is unavailable right now.', { type: 'call_rejected', call_id: call.call_id });
+    await notify('user', call.user_id, {
+      title: 'Call Rejected', body: 'Doctor is unavailable right now.',
+      type: 'call', reference_type: 'call', reference_id: call.id,
+      data: { event: 'call_rejected', call_id: call.call_id },
+    });
 
     return res.status(200).json({ message: 'Call rejected.', data: { call_id: call.call_id, status: 'rejected' } });
   } catch (error) { console.error('rejectCall error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
@@ -250,9 +261,23 @@ async function endCallInternal(call, endedBy, reason) {
     await pool.query('UPDATE doctors SET total_consultations = total_consultations + 1 WHERE id = ?', [call.doctor_id]);
   }
 
-  // Notify both sides
+  // Notify both sides (SSE for live screens + FCM/persist for background)
   sendToClient(`user_${call.user_id}`, 'call_ended', { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, total_charged: totalCharged, reason });
   sendToClient(`doctor_${call.doctor_id}`, 'call_ended', { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, doctor_earning: doctorEarning, admin_commission: commission, reason });
+
+  const endedTitle = finalStatus === 'completed' ? 'Call Ended' : (finalStatus === 'missed' ? 'Missed Call' : 'Call Cancelled');
+  await notify('user', call.user_id, {
+    title: endedTitle,
+    body: finalStatus === 'completed' ? `Call ended. Duration: ${fresh[0].total_minutes} min, charged ₹${totalCharged}.` : `Your call was ${finalStatus}.`,
+    type: 'call', reference_type: 'call', reference_id: call.id,
+    data: { event: 'call_ended', call_id: call.call_id, status: finalStatus },
+  });
+  await notify('doctor', call.doctor_id, {
+    title: endedTitle,
+    body: finalStatus === 'completed' ? `Call ended. ${fresh[0].total_minutes} min, earning ₹${doctorEarning}.` : `Call ${finalStatus}.`,
+    type: 'call', reference_type: 'call', reference_id: call.id,
+    data: { event: 'call_ended', call_id: call.call_id, status: finalStatus },
+  });
 
   return { call_id: call.call_id, status: finalStatus, total_minutes: fresh[0].total_minutes, total_charged: totalCharged, admin_commission_percent: commissionPercent, admin_commission: commission, doctor_earning: doctorEarning };
 }
@@ -334,8 +359,13 @@ const uploadUserReports = async (req, res) => {
 
     await pool.query('UPDATE doctor_calls SET user_reports = ? WHERE id = ?', [JSON.stringify(updated), call.id]);
 
-    // Notify doctor (live during call)
+    // Notify doctor (live SSE + FCM/persist for background)
     sendToClient(`doctor_${call.doctor_id}`, 'report_uploaded', { call_id: call.call_id, reports: added });
+    await notify('doctor', call.doctor_id, {
+      title: 'Reports Uploaded 📄', body: 'Patient shared medical reports for the call.',
+      type: 'call', reference_type: 'call', reference_id: call.id,
+      data: { event: 'report_uploaded', call_id: call.call_id },
+    });
 
     return res.status(200).json({ message: 'Reports uploaded.', data: { call_id: call.call_id, reports: updated } });
   } catch (error) { console.error('uploadUserReports error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
@@ -367,10 +397,13 @@ const uploadPrescription = async (req, res) => {
       [JSON.stringify(updated), doctor_notes ?? null, diagnosis ?? null, call.id]
     );
 
-    // Notify user (live + push)
+    // Notify user (live SSE + FCM/persist)
     sendToClient(`user_${call.user_id}`, 'prescription_uploaded', { call_id: call.call_id, prescriptions: added, doctor_notes: doctor_notes ?? null, diagnosis: diagnosis ?? null });
-    const [u] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [call.user_id]);
-    if (u[0]?.fcm_token) await notificationService.sendToDevice(u[0].fcm_token, 'Prescription Added 📄', 'Doctor has shared your prescription.', { type: 'prescription_uploaded', call_id: call.call_id });
+    await notify('user', call.user_id, {
+      title: 'Prescription Added 📄', body: 'Doctor has shared your prescription.',
+      type: 'call', reference_type: 'call', reference_id: call.id,
+      data: { event: 'prescription_uploaded', call_id: call.call_id },
+    });
 
     return res.status(200).json({ message: 'Prescription saved.', data: { call_id: call.call_id, prescriptions: updated, doctor_notes: doctor_notes ?? call.doctor_notes, diagnosis: diagnosis ?? call.diagnosis } });
   } catch (error) { console.error('uploadPrescription error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }

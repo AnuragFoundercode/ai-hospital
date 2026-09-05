@@ -5,6 +5,7 @@ const inventoryController = require('../../controllers/pharmacy/inventory.contro
 const orderController = require('../../controllers/pharmacy/order.controller');
 const dashboardController = require('../../controllers/pharmacy/dashboard.controller');
 const walletController = require('../../controllers/pharmacy/wallet.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const pharmacyAuth = require('../../middlewares/pharmacy/pharmacy.auth');
 
@@ -53,5 +54,10 @@ router.get('/events/stream', pharmacyAuth, async (req, res) => {
   const [pending] = await pool.query("SELECT COUNT(*) as count FROM pharmacy_orders WHERE pharmacy_id = ? AND status = 'pending'", [req.pharmacy.id]);
   res.write(`event: initial\ndata: ${JSON.stringify({ pending_orders: pending[0].count })}\n\n`);
 });
+
+// Notifications
+router.get('/notifications', pharmacyAuth, notificationController.list('pharmacy'));
+router.put('/notifications/read-all', pharmacyAuth, notificationController.markAllRead('pharmacy'));
+router.put('/notifications/:id/read', pharmacyAuth, notificationController.markRead('pharmacy'));
 
 module.exports = router;

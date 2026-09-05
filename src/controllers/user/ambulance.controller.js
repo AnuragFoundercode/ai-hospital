@@ -43,7 +43,7 @@ const getAmbulanceList = async (req, res) => {
     const [rows] = await pool.query(
       `SELECT asr.id as service_id, asr.uuid, asr.name, asr.owner_name, asr.full_name, asr.mobile, asr.profile_photo,
               asr.base_latitude, asr.base_longitude, asr.latitude, asr.longitude, asr.is_online,
-              asr.base_fare as service_base_fare, asr.per_km_charge as service_per_km,
+              asr.base_fare as service_base_fare, asr.per_km_charge as service_per_km, asr.average_rating,
               asv.vehicle_number, asv.vehicle_model, asv.ambulance_type_id as type_id,
               at.name as type_name, at.base_fare as type_base_fare, at.per_km_charge as type_per_km, at.description as type_description, at.icon_url as type_icon
        FROM ambulance_services asr
@@ -74,6 +74,7 @@ const getAmbulanceList = async (req, res) => {
         type: { id: r.type_id, name: r.type_name, base_fare: r.type_base_fare, per_km_charge: r.type_per_km, icon: r.type_icon },
         base_fare: r.service_base_fare || r.type_base_fare,
         per_km_charge: r.service_per_km || r.type_per_km,
+        rating: r.average_rating,
         is_online: r.is_online,
         distance: distanceInfo,
       };
@@ -129,6 +130,7 @@ const getAmbulanceDetail = async (req, res) => {
         type: { id: r.ambulance_type_id, name: r.type_name, base_fare: r.type_base_fare, per_km_charge: r.type_per_km, description: r.type_description },
         location: { city: r.city, state: r.state, latitude: r.base_latitude, longitude: r.base_longitude, coverage_radius_km: r.coverage_radius_km },
         fare: { base_fare: r.base_fare || r.type_base_fare, per_km_charge: r.per_km_charge || r.type_per_km },
+        rating: r.average_rating,
         is_verified: r.is_verified,
         distance_from_user: distanceInfo,
       },

@@ -6,6 +6,7 @@ const slotController = require('../../controllers/diagnostic/slot.controller');
 const bookingController = require('../../controllers/diagnostic/booking.controller');
 const walletController = require('../../controllers/diagnostic/wallet.controller');
 const dashboardController = require('../../controllers/diagnostic/dashboard.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const diagnosticAuth = require('../../middlewares/diagnostic/diagnostic.auth');
 
@@ -69,5 +70,10 @@ router.post('/wallet/clear-due/verify', diagnosticAuth, walletController.verifyC
 router.get('/wallet/due-payments', diagnosticAuth, walletController.getAdminDuePayments);
 router.post('/wallet/withdraw', diagnosticAuth, walletController.requestWithdrawal);
 router.get('/wallet/withdrawals', diagnosticAuth, walletController.getWithdrawals);
+
+// Notifications
+router.get('/notifications', diagnosticAuth, notificationController.list('diagnostic_center'));
+router.put('/notifications/read-all', diagnosticAuth, notificationController.markAllRead('diagnostic_center'));
+router.put('/notifications/:id/read', diagnosticAuth, notificationController.markRead('diagnostic_center'));
 
 module.exports = router;

@@ -4,6 +4,7 @@ const doctorController = require('../../controllers/doctor/doctor.controller');
 const appointmentController = require('../../controllers/doctor/appointment.controller');
 const callController = require('../../controllers/doctor/call.controller');
 const dashboardController = require('../../controllers/doctor/dashboard.controller');
+const notificationController = require('../../controllers/notification.controller');
 const doctorAuth = require('../../middlewares/doctor/doctor.auth');
 const { registerClient } = require('../../events/sse');
 
@@ -52,5 +53,10 @@ router.get('/wallet/withdrawals', doctorAuth, dashboardController.getWithdrawals
 router.get('/events/stream', doctorAuth, (req, res) => {
   registerClient(req, res, `doctor_${req.doctor.id}`);
 });
+
+// Notifications
+router.get('/notifications', doctorAuth, notificationController.list('doctor'));
+router.put('/notifications/read-all', doctorAuth, notificationController.markAllRead('doctor'));
+router.put('/notifications/:id/read', doctorAuth, notificationController.markRead('doctor'));
 
 module.exports = router;
