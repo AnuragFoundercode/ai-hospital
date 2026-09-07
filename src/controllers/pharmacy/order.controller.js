@@ -189,7 +189,13 @@ const updateOrderStatus = async (req, res) => {
 
           for (const dp of nearbyPartners) {
             sendToClient(`delivery_${dp.id}`, 'new_delivery_request', { request_id: requestId, pickup_address: pharmacyRows[0].address_line1, distance_km: distanceKm.toFixed(2), earning: deliveryEarning });
-            if (dp.fcm_token) await notificationService.sendToDevice(dp.fcm_token, 'New Delivery 🛵', `₹${deliveryEarning} | ${distanceKm.toFixed(1)} km`, { type: 'new_delivery', request_id: requestId });
+            await notify('delivery_partner', dp.id, {
+              title: 'New Delivery 🛵',
+              body: `₹${deliveryEarning} | ${distanceKm.toFixed(1)} km`,
+              type: 'order', reference_type: 'delivery_request', reference_id: null, reference_code: requestId,
+              data: { event: 'new_delivery', request_id: requestId },
+              fcmToken: dp.fcm_token,
+            });
           }
         }
       } catch (delErr) { console.error('Delivery request creation error:', delErr.message); }

@@ -235,6 +235,42 @@ const getServiceDetail = async (req, res) => {
   }
 };
 
+/**
+ * PATCH /api/v1/diagnostic/service/:id/toggle
+ * Activate / deactivate a service. If body has is_available it sets that,
+ * otherwise it flips the current value.
+ * Body (optional): { is_available: true|false }
+ */
+const toggleService = async (req, res) => {
+  try {
+    const centerId = req.diagnostic.id;
+    const { id } = req.params;
+
+    const [rows] = await pool.query(
+      'SELECT is_available FROM diagnostic_service_pricing WHERE id = ? AND diagnostic_center_id = ?',
+      [id, centerId]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Service not found.' });
+
+    const newValue = req.body.is_available !== undefined
+      ? (req.body.is_available ? 1 : 0)
+      : (rows[0].is_available ? 0 : 1);
+
+    await pool.query(
+      'UPDATE diagnostic_service_pricing SET is_available = ? WHERE id = ? AND diagnostic_center_id = ?',
+      [newValue, id, centerId]
+    );
+
+    return res.status(200).json({
+      message: newValue ? 'Service activated.' : 'Service deactivated.',
+      data: { id: parseInt(id), is_available: !!newValue },
+    });
+  } catch (error) {
+    console.error('diagnostic toggleService error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getMyServices,
   getCategories,
@@ -242,4 +278,5 @@ module.exports = {
   updateService,
   removeService,
   getServiceDetail,
+  toggleService,
 };

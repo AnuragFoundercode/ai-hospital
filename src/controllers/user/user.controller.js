@@ -167,6 +167,7 @@ const getProfile = async (req, res) => {
         profile_photo: user.profile_photo,
         aadhaar_number: user.aadhaar_number,
         abha_number: user.abha_number,
+        credit_limit: user.credit_limit,
         is_verified: user.is_verified,
         created_at: user.created_at,
       },

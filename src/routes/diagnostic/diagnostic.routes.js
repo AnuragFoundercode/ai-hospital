@@ -41,6 +41,7 @@ router.post('/services', diagnosticAuth, serviceController.addService);
 router.put('/services/:id', diagnosticAuth, serviceController.updateService);
 router.delete('/services/:id', diagnosticAuth, serviceController.removeService);
 router.get('/service/:id', diagnosticAuth, serviceController.getServiceDetail);
+router.patch('/service/:id/toggle', diagnosticAuth, serviceController.toggleService);
 
 // Slot Management
 router.get('/slots', diagnosticAuth, slotController.getSlots);

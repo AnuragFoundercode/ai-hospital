@@ -214,9 +214,15 @@ const bookAmbulance = async (req, res) => {
     }
 
     // Notify ambulance provider (FCM + SSE)
-    if (amb.fcm_token) {
-      const notificationService = require('../../services/notification.service');
-      await notificationService.sendToDevice(amb.fcm_token, 'New Ambulance Booking 🚑', `Pickup: ${pickup.address_line1}. Fare: ₹${totalFare.toFixed(0)}`, { type: 'new_ambulance_booking', booking_id: bookingId });
+    {
+      const { notify } = require('../../services/notify');
+      await notify('ambulance_service', amb.id, {
+        title: 'New Ambulance Booking 🚑',
+        body: `Pickup: ${pickup.address_line1}. Fare: ₹${totalFare.toFixed(0)}`,
+        type: 'booking', reference_type: 'ambulance_booking', reference_id: null, reference_code: bookingId,
+        data: { event: 'new_ambulance_booking', booking_id: bookingId },
+        fcmToken: amb.fcm_token,
+      });
     }
     const { sendToClient } = require('../../events/sse');
     sendToClient(`ambulance_${amb.id}`, 'new_booking', { booking_id: bookingId, pickup_address: pickup.address_line1, drop_address, fare: totalFare.toFixed(2), patient_name });

@@ -175,9 +175,71 @@ const getDoctorProfile = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/emergency-doctors?page=&limit=&search=
+ * Browse doctors available for emergency video calls + admin emergency config.
+ */
+const getEmergencyDoctors = async (req, res) => {
+  try {
+    const { pool } = require('../../config/database');
+    const { page = 1, limit = 10, search } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const where = ['d.is_active = 1', 'd.is_verified = 1', 'd.is_emergency_available = 1'];
+    const params = [];
+    if (search) { where.push('d.full_name LIKE ?'); params.push(`%${search}%`); }
+    const whereClause = where.join(' AND ');
+
+    const [countRows] = await pool.query(`SELECT COUNT(*) AS total FROM doctors d WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT d.uuid, d.full_name, d.gender, d.profile_photo, d.average_rating, d.per_minute_fee,
+              d.call_status, d.qualification, d.experience_years, dc.name AS category_name
+       FROM doctors d
+       LEFT JOIN doctor_categories dc ON d.category_id = dc.id
+       WHERE ${whereClause}
+       ORDER BY FIELD(d.call_status,'online','busy','offline'), d.average_rating DESC
+       LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    const [cfg] = await pool.query(
+      "SELECT config_key, config_value FROM admin_config WHERE config_key IN ('emergency_call_is_free','emergency_call_fee','emergency_call_duration_minutes')"
+    );
+    const cfgMap = {};
+    cfg.forEach((c) => { cfgMap[c.config_key] = c.config_value; });
+    const isFree = String(cfgMap.emergency_call_is_free) === 'true';
+
+    return res.status(200).json({
+      message: 'Emergency doctors fetched.',
+      config: {
+        is_free: isFree,
+        fee: isFree ? 0 : parseFloat(cfgMap.emergency_call_fee || 0),
+        duration_minutes: parseInt(cfgMap.emergency_call_duration_minutes || 10),
+      },
+      data: rows.map((d) => ({
+        id: d.uuid,
+        name: d.full_name,
+        gender: d.gender,
+        profile_photo: d.profile_photo,
+        rating: d.average_rating,
+        call_status: d.call_status,
+        is_online: d.call_status === 'online',
+        qualification: d.qualification,
+        experience_years: d.experience_years,
+        category: d.category_name,
+      })),
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: countRows[0].total, total_pages: Math.ceil(countRows[0].total / parseInt(limit)) },
+    });
+  } catch (error) {
+    console.error('getEmergencyDoctors error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getDoctorList,
   streamDoctorList,
+  getEmergencyDoctors,
   getDoctorCategories,
   getDoctorProfile,
 };

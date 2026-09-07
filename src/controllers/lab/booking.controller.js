@@ -1,5 +1,6 @@
 const { pool } = require('../../config/database');
 const notificationService = require('../../services/notification.service');
+const { notify } = require('../../services/notify');
 
 // ─────────────────────────────────────────────
 // LAB BOOKING CONTROLLER - Accept/Reject bookings
@@ -108,25 +109,14 @@ const acceptBooking = async (req, res) => {
       [booking.id, booking.status, labId]
     );
 
-    // Send notification to user
-    const [userRows] = await pool.query('SELECT fcm_token, full_name FROM users WHERE id = ?', [booking.user_id]);
-    const user = userRows[0];
     const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
-    if (user && user.fcm_token) {
-      await notificationService.sendToDevice(
-        user.fcm_token,
-        'Lab Test Accepted ✅',
-        `Your lab test booking with ${metadata.lab_name || 'Lab'} has been accepted. Sample collection will be scheduled soon.`,
-        { type: 'lab_booking_accepted', booking_id }
-      );
-    }
-
-    // Save notification in DB
-    await pool.query(
-      "INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('user', ?, 'Lab Test Accepted ✅', ?, 'booking', 'booking', ?, ?)",
-      [booking.user_id, `Your lab test booking has been accepted by ${metadata.lab_name || 'Lab'}.`, booking.id, user?.fcm_token ? 'push' : 'sms']
-    );
+    await notify('user', booking.user_id, {
+      title: 'Lab Test Accepted ✅',
+      body: `Your lab test booking with ${metadata.lab_name || 'Lab'} has been accepted. Sample collection will be scheduled soon.`,
+      type: 'booking', reference_type: 'booking', reference_id: booking.id, reference_code: booking_id,
+      data: { event: 'lab_booking_accepted', booking_id },
+    });
 
     // If home collection → create sample_collection_request for nearby collectors
     if (metadata.collection_type === 'home') {
@@ -171,7 +161,13 @@ const acceptBooking = async (req, res) => {
 
           for (const sc of nearbyCollectors) {
             sendToClient(`collector_${sc.id}`, 'new_collection_request', { request_id: requestId, pickup_address: pickupAddress, distance_km: distanceKm.toFixed(2), earning: collectionEarning });
-            if (sc.fcm_token) await notificationService.sendToDevice(sc.fcm_token, 'New Sample Collection 🧪', `₹${collectionEarning} | ${distanceKm.toFixed(1)} km`, { type: 'new_collection', request_id: requestId });
+            await notify('sample_collector', sc.id, {
+              title: 'New Sample Collection 🧪',
+              body: `₹${collectionEarning} | ${distanceKm.toFixed(1)} km`,
+              type: 'order', reference_type: 'collection_request', reference_id: null, reference_code: requestId,
+              data: { event: 'new_collection', request_id: requestId },
+              fcmToken: sc.fcm_token,
+            });
           }
         }
       } catch (collErr) { console.error('Sample collection request error:', collErr.message); }
@@ -229,24 +225,14 @@ const rejectBooking = async (req, res) => {
       await pool.query("UPDATE bookings SET payment_status = 'refund_initiated' WHERE id = ?", [booking.id]);
     }
 
-    // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    const user = userRows[0];
     const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
-    if (user && user.fcm_token) {
-      await notificationService.sendToDevice(
-        user.fcm_token,
-        'Lab Test Rejected ❌',
-        `Your lab test booking has been rejected. Reason: ${reason || 'Not available'}. Refund will be processed.`,
-        { type: 'lab_booking_rejected', booking_id }
-      );
-    }
-
-    await pool.query(
-      "INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('user', ?, 'Lab Test Rejected ❌', ?, 'booking', 'booking', ?, ?)",
-      [booking.user_id, `Your lab test was rejected. Reason: ${reason || 'Not available'}. Refund will be processed.`, booking.id, user?.fcm_token ? 'push' : 'sms']
-    );
+    await notify('user', booking.user_id, {
+      title: 'Lab Test Rejected ❌',
+      body: `Your lab test booking has been rejected. Reason: ${reason || 'Not available'}. Refund will be processed.`,
+      type: 'booking', reference_type: 'booking', reference_id: booking.id, reference_code: booking_id,
+      data: { event: 'lab_booking_rejected', booking_id },
+    });
 
     return res.status(200).json({      message: 'Booking rejected. User notified.',
       data: { booking_id, status: 'cancelled', reason: reason || 'Rejected by lab' },
@@ -288,23 +274,12 @@ const startProcessing = async (req, res) => {
       [booking.id, labId]
     );
 
-    // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    const user = userRows[0];
-
-    if (user && user.fcm_token) {
-      await notificationService.sendToDevice(
-        user.fcm_token,
-        'Test In Progress 🔬',
-        'Your sample has been collected. Test is being processed.',
-        { type: 'lab_test_processing', booking_id }
-      );
-    }
-
-    await pool.query(
-      "INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('user', ?, 'Test In Progress 🔬', 'Your sample has been collected. Test is being processed.', 'booking', 'booking', ?, ?)",
-      [booking.user_id, booking.id, user?.fcm_token ? 'push' : 'sms']
-    );
+    await notify('user', booking.user_id, {
+      title: 'Test In Progress 🔬',
+      body: 'Your sample has been collected. Test is being processed.',
+      type: 'booking', reference_type: 'booking', reference_id: booking.id, reference_code: booking_id,
+      data: { event: 'lab_test_processing', booking_id },
+    });
 
     return res.status(200).json({      message: 'Test processing started. User notified.',
       data: { booking_id, status: 'in_progress' },
@@ -348,23 +323,12 @@ const completeBooking = async (req, res) => {
       await walletModel.credit(labId, parseFloat(booking.final_amount), `Test fee - ${booking.booking_id}`, 'test_fee', booking.id);
     }
 
-    // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    const user = userRows[0];
-
-    if (user && user.fcm_token) {
-      await notificationService.sendToDevice(
-        user.fcm_token,
-        'Lab Report Ready 📋',
-        'Your lab test is completed. Report will be available soon.',
-        { type: 'lab_test_completed', booking_id }
-      );
-    }
-
-    await pool.query(
-      "INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('user', ?, 'Lab Report Ready 📋', 'Your lab test is completed. Report will be available soon.', 'report', 'booking', ?, ?)",
-      [booking.user_id, booking.id, user?.fcm_token ? 'push' : 'sms']
-    );
+    await notify('user', booking.user_id, {
+      title: 'Lab Report Ready 📋',
+      body: 'Your lab test is completed. Report will be available soon.',
+      type: 'report', reference_type: 'booking', reference_id: booking.id, reference_code: booking_id,
+      data: { event: 'lab_test_completed', booking_id },
+    });
 
     return res.status(200).json({      message: 'Test completed. Amount credited to wallet.',
       data: { booking_id, status: 'completed' },
@@ -408,23 +372,12 @@ const uploadReport = async (req, res) => {
 
     await pool.query('UPDATE bookings SET metadata = ? WHERE id = ?', [JSON.stringify(metadata), booking.id]);
 
-    // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [booking.user_id]);
-    const user = userRows[0];
-
-    if (user && user.fcm_token) {
-      await notificationService.sendToDevice(
-        user.fcm_token,
-        'Test Report Uploaded 📄',
-        `Your lab test report for booking ${booking_id} is now available. Please check.`,
-        { type: 'lab_report_uploaded', booking_id }
-      );
-    }
-
-    await pool.query(
-      "INSERT INTO notifications (recipient_type, recipient_id, title, body, type, reference_type, reference_id, sent_via) VALUES ('user', ?, 'Test Report Uploaded 📄', ?, 'report', 'booking', ?, ?)",
-      [booking.user_id, `Your lab test report for booking ${booking_id} is ready.`, booking.id, user?.fcm_token ? 'push' : 'sms']
-    );
+    await notify('user', booking.user_id, {
+      title: 'Test Report Uploaded 📄',
+      body: `Your lab test report for booking ${booking_id} is now available. Please check.`,
+      type: 'report', reference_type: 'booking', reference_id: booking.id, reference_code: booking_id,
+      data: { event: 'lab_report_uploaded', booking_id },
+    });
 
     return res.status(200).json({      message: 'Report uploaded. User notified.',
       data: { booking_id, reports: metadata.reports },

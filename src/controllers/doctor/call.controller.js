@@ -100,6 +100,99 @@ const startCall = async (req, res) => {
 };
 
 /**
+ * POST /api/v1/user/emergency-doctor/:id/call
+ * Start an EMERGENCY call. Free/paid (flat fee) + max duration come from admin_config.
+ * :id = doctor uuid (must be is_emergency_available)
+ */
+const startEmergencyCall = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const [docRows] = await pool.query('SELECT * FROM doctors WHERE uuid = ? AND is_active = 1 AND is_verified = 1 AND is_emergency_available = 1', [id]);
+    if (!docRows.length) return res.status(404).json({ message: 'Emergency doctor not found.' });
+    const doctor = docRows[0];
+
+    if (doctor.call_status !== 'online') {
+      return res.status(400).json({ message: `Doctor is currently ${doctor.call_status}. Cannot call now.` });
+    }
+
+    // Admin emergency config
+    const [cfg] = await pool.query(
+      "SELECT config_key, config_value FROM admin_config WHERE config_key IN ('emergency_call_is_free','emergency_call_fee','emergency_call_duration_minutes')"
+    );
+    const cfgMap = {};
+    cfg.forEach((c) => { cfgMap[c.config_key] = c.config_value; });
+    const isFree = String(cfgMap.emergency_call_is_free) === 'true';
+    const flatFee = isFree ? 0 : parseFloat(cfgMap.emergency_call_fee || 0);
+    const maxDuration = parseInt(cfgMap.emergency_call_duration_minutes || 10);
+
+    // Ensure wallet; if paid, check + deduct flat fee upfront
+    await pool.query('INSERT IGNORE INTO wallets (user_id) VALUES (?)', [userId]);
+    let newBalance = null;
+    if (!isFree && flatFee > 0) {
+      const [walletRows] = await pool.query('SELECT id, balance FROM wallets WHERE user_id = ?', [userId]);
+      const balance = parseFloat(walletRows[0].balance);
+      if (balance < flatFee) {
+        return res.status(400).json({ message: `Insufficient wallet balance. Emergency call costs ₹${flatFee}.`, data: { balance, fee: flatFee } });
+      }
+      newBalance = balance - flatFee;
+      await pool.query('UPDATE wallets SET balance = ? WHERE user_id = ?', [newBalance, userId]);
+    }
+
+    const callId = genCallId();
+    const channelName = callId;
+    await pool.query(
+      "INSERT INTO doctor_calls (call_id, user_id, doctor_id, channel_name, call_type, is_free, max_duration_minutes, per_minute_fee, total_charged, status) VALUES (?, ?, ?, ?, 'emergency', ?, ?, 0, ?, 'ringing')",
+      [callId, userId, doctor.id, channelName, isFree ? 1 : 0, maxDuration, flatFee]
+    );
+
+    // Charge transaction for paid emergency call (flat, upfront)
+    if (!isFree && flatFee > 0) {
+      const [w] = await pool.query('SELECT id FROM wallets WHERE user_id = ?', [userId]);
+      const [cr] = await pool.query('SELECT id FROM doctor_calls WHERE call_id = ?', [callId]);
+      await pool.query(
+        "INSERT INTO wallet_transactions (wallet_id, user_id, type, amount, description, reference_type, reference_id, balance_after, created_by_type) VALUES (?, ?, 'debit', ?, ?, 'call_charge', ?, ?, 'system')",
+        [w[0].id, userId, flatFee, `Emergency call - ${callId}`, cr[0].id, newBalance]
+      );
+    }
+
+    await pool.query("UPDATE doctors SET call_status = 'busy' WHERE id = ?", [doctor.id]);
+
+    const userToken = safeToken(channelName, userId);
+    const [userInfo] = await pool.query('SELECT full_name, profile_photo FROM users WHERE id = ?', [userId]);
+    sendToClient(`doctor_${doctor.id}`, 'incoming_call', {
+      call_id: callId, channel_name: channelName, call_type: 'emergency',
+      patient: { name: userInfo[0]?.full_name, photo: userInfo[0]?.profile_photo },
+      max_duration_minutes: maxDuration,
+    });
+    await notify('doctor', doctor.id, {
+      title: 'Emergency Call 🚨',
+      body: `${userInfo[0]?.full_name || 'A patient'} needs an emergency consultation.`,
+      type: 'call', reference_type: 'call', reference_id: null, reference_code: callId,
+      data: { event: 'incoming_call', call_id: callId, call_type: 'emergency' },
+      fcmToken: doctor.fcm_token,
+    });
+
+    return res.status(201).json({
+      message: 'Calling emergency doctor...',
+      data: {
+        call_id: callId,
+        channel_name: channelName,
+        call_type: 'emergency',
+        status: 'ringing',
+        is_free: isFree,
+        fee: flatFee,
+        max_duration_minutes: maxDuration,
+        wallet_balance: newBalance,
+        agora: { app_id: userToken.appId, token: userToken.token, channel_name: channelName, uid: userId },
+        doctor: { id: doctor.uuid, name: doctor.full_name, photo: doctor.profile_photo },
+      },
+    });
+  } catch (error) { console.error('startEmergencyCall error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
  * POST /api/v1/user/call/:call_id/tick
  * Called by the app every minute during an ongoing call.
  * Deducts per_minute_fee from user wallet. If balance runs out, call is auto-ended.
@@ -113,6 +206,18 @@ const tickCall = async (req, res) => {
     if (!callRows.length) return res.status(404).json({ message: 'Call not found.' });
     const call = callRows[0];
     if (call.status !== 'ongoing') return res.status(400).json({ message: `Call is ${call.status}.` });
+
+    // EMERGENCY call: no per-minute charge (flat/free). Just track minutes + enforce max duration.
+    if (call.call_type === 'emergency') {
+      const usedMinutes = call.total_minutes + 1;
+      await pool.query('UPDATE doctor_calls SET total_minutes = total_minutes + 1 WHERE id = ?', [call.id]);
+      const maxD = call.max_duration_minutes || 0;
+      if (maxD > 0 && usedMinutes >= maxD) {
+        await endCallInternal(call, 'system', 'Emergency call duration limit reached');
+        return res.status(200).json({ message: 'Emergency call ended: time limit reached.', data: { call_ended: true, reason: 'duration_limit', minutes: usedMinutes } });
+      }
+      return res.status(200).json({ message: 'Minute counted.', data: { call_ended: false, minutes: usedMinutes, remaining_minutes: maxD ? Math.max(0, maxD - usedMinutes) : null } });
+    }
 
     const fee = parseFloat(call.per_minute_fee);
     const [walletRows] = await pool.query('SELECT id, balance FROM wallets WHERE user_id = ?', [userId]);
@@ -520,6 +625,7 @@ const getUserDoctorCallHistory = async (req, res) => {
 
 module.exports = {
   startCall,
+  startEmergencyCall,
   tickCall,
   acceptCall,
   rejectCall,

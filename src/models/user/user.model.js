@@ -12,7 +12,7 @@ const findByMobile = async (mobile) => {
 
 const findById = async (id) => {
   const [rows] = await pool.query(
-    'SELECT id, uuid, full_name, mobile, email, gender, date_of_birth, blood_group, profile_photo, aadhaar_number, abha_number, is_verified, created_at FROM users WHERE id = ?',
+    'SELECT id, uuid, full_name, mobile, email, gender, date_of_birth, blood_group, profile_photo, aadhaar_number, abha_number, credit_limit, is_verified, created_at FROM users WHERE id = ?',
     [id]
   );
   return rows[0] || null;

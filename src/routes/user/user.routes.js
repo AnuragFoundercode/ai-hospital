@@ -13,6 +13,7 @@ const callController = require('../../controllers/doctor/call.controller');
 const walletController = require('../../controllers/user/wallet.controller');
 const notificationController = require('../../controllers/notification.controller');
 const reviewController = require('../../controllers/user/review.controller');
+const creditController = require('../../controllers/user/credit.controller');
 const userAuth = require('../../middlewares/user/user.auth');
 
 // ─────────────────────────────────────────────
@@ -37,6 +38,7 @@ router.delete('/address/:id', userAuth, userController.deleteAddress);
 router.get('/doctor-categories', userAuth, doctorController.getDoctorCategories);
 router.get('/doctors', userAuth, doctorController.getDoctorList);
 router.get('/doctors/stream', userAuth, doctorController.streamDoctorList);
+router.get('/emergency-doctors', userAuth, doctorController.getEmergencyDoctors);
 router.get('/doctor/:id', userAuth, doctorController.getDoctorProfile);
 
 // Wallet APIs
@@ -47,12 +49,19 @@ router.get('/wallet/transactions', userAuth, walletController.getTransactions);
 
 // Doctor Video Call (per-minute) APIs
 router.post('/doctor/:id/call', userAuth, callController.startCall);
+router.post('/emergency-doctor/:id/call', userAuth, callController.startEmergencyCall);
 router.post('/call/:call_id/tick', userAuth, callController.tickCall);
 router.post('/call/:call_id/end', userAuth, callController.endCall);
 router.post('/call/:call_id/reports', userAuth, callController.uploadUserReports);
 router.get('/call/:call_id', userAuth, callController.getCallDetail);
 router.get('/calls', userAuth, callController.getUserCallHistory);
 router.get('/doctor/:id/calls', userAuth, callController.getUserDoctorCallHistory);
+
+// Credit (credit limit + credit application/loan)
+router.get('/credit/dashboard', userAuth, creditController.getCreditDashboard);
+router.get('/credit/limit', userAuth, creditController.getCreditLimit);
+router.post('/credit/apply', userAuth, creditController.applyCreditLimit);
+router.get('/credit/history', userAuth, creditController.getCreditHistory);
 
 // Vendor reviews (any vendor: doctor|pharmacy|pathology_lab|diagnostic_center|blood_bank|ambulance_service)
 router.post('/vendor-review', userAuth, reviewController.upsertReview);

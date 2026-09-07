@@ -34,6 +34,7 @@ router.get('/dashboard', bloodbankAuth, dashboardController.getDashboard);
 router.get('/inventory', bloodbankAuth, inventoryController.getInventoryItems);
 router.get('/inventory/summary', bloodbankAuth, inventoryController.getInventorySummary);
 router.post('/inventory', bloodbankAuth, inventoryController.addInventory);
+router.get('/inventory/:id', bloodbankAuth, inventoryController.getInventoryItemDetail);
 router.put('/inventory/:id', bloodbankAuth, inventoryController.updateInventoryItem);
 router.delete('/inventory/:id', bloodbankAuth, inventoryController.deleteInventoryItem);
 

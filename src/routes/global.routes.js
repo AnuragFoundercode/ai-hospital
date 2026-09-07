@@ -9,5 +9,8 @@ const globalController = require('../controllers/global.controller');
 router.get('/states', globalController.getStates);
 router.get('/zones', globalController.getZonesByState);
 router.post('/validate-pincode', globalController.validatePincode);
+router.get('/help-support', globalController.getHelpSupport);
+router.get('/policies', globalController.getPolicies);
+router.get('/policies/:slug', globalController.getPolicyBySlug);
 
 module.exports = router;
