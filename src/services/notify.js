@@ -17,6 +17,7 @@ const RECIPIENT_TABLE = {
   diagnostic_center: 'diagnostic_centers',
   ambulance_service: 'ambulance_services',
   delivery_partner: 'delivery_partners',
+  blood_delivery_partner: 'blood_delivery_partners',
   sample_collector: 'sample_collectors',
 };
 
@@ -68,7 +69,11 @@ const notify = async (recipientType, recipientId, opts = {}) => {
       if (reference_code != null) dataPayload.reference_code = String(reference_code);
       dataPayload.notif_type = String(type);
 
-      const res = await notificationService.sendToDevice(fcmToken, title, body, dataPayload);
+      // USER -> notification + data (system tray + handler).
+      // VENDOR (everything except 'user') -> data-only (app builds its own popup).
+      const dataOnly = recipientType !== 'user';
+
+      const res = await notificationService.sendToDevice(fcmToken, title, body, dataPayload, { dataOnly });
       result.pushed = !!res?.success;
     } catch (e) {
       console.error('notify: FCM send failed:', e.message);

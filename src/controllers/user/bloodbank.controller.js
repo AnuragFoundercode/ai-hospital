@@ -192,12 +192,16 @@ const getBloodAvailability = async (req, res) => {
 
     const bankId = bankRows[0].id;
 
+    // Live count — non-expired available bags per group (1 bag = 1 unit)
     const [inventory] = await pool.query(
-      'SELECT blood_group, available_units, price_per_unit FROM bloodbank_inventory WHERE blood_bank_id = ? ORDER BY blood_group',
+      `SELECT blood_group, COUNT(*) AS available_units, COALESCE(MAX(price_per_unit), 0) AS price_per_unit
+       FROM bloodbank_inventory_items
+       WHERE blood_bank_id = ? AND status = 'available' AND expiry_date >= CURDATE()
+       GROUP BY blood_group ORDER BY blood_group`,
       [bankId]
     );
 
-    const totalUnits = inventory.reduce((sum, item) => sum + item.available_units, 0);
+    const totalUnits = inventory.reduce((sum, item) => sum + Number(item.available_units), 0);
 
     return res.status(200).json({
       message: 'Blood availability fetched.',
@@ -250,17 +254,17 @@ const requestBlood = async (req, res) => {
     }
     const bankId = bankRows[0].id;
 
-    // Check availability
-    const [invRows] = await pool.query(
-      'SELECT available_units, price_per_unit FROM bloodbank_inventory WHERE blood_bank_id = ? AND blood_group = ?',
+    // Live availability check — count non-expired available bags (1 bag = 1 unit)
+    const [availRows] = await pool.query(
+      "SELECT COUNT(*) AS available_units, COALESCE(MAX(price_per_unit), 0) AS price_per_unit FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()",
       [bankId, blood_group]
     );
 
-    if (!invRows.length || invRows[0].available_units < units_required) {
-      return res.status(400).json({ message: `${blood_group} blood not available in required quantity. Available: ${invRows.length ? invRows[0].available_units : 0} units.` });
+    if (!availRows.length || availRows[0].available_units < units_required) {
+      return res.status(400).json({ message: `${blood_group} blood not available in required quantity. Available: ${availRows.length ? availRows[0].available_units : 0} units.` });
     }
 
-    const pricePerUnit = parseFloat(invRows[0].price_per_unit);
+    const pricePerUnit = parseFloat(availRows[0].price_per_unit);
     const totalAmount = pricePerUnit * units_required;
 
     // Generate request ID

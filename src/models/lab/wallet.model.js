@@ -52,7 +52,14 @@ const debit = async (labId, amount, description, referenceType, referenceId) => 
 const getTransactions = async (labId, { page = 1, limit = 20 }) => {
   const offset = (page - 1) * limit;
   const [countResult] = await pool.query('SELECT COUNT(*) as total FROM lab_wallet_transactions WHERE lab_id = ?', [labId]);
-  const [rows] = await pool.query('SELECT * FROM lab_wallet_transactions WHERE lab_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', [labId, limit, offset]);
+  const [rows] = await pool.query(
+    `SELECT lwt.*, b.booking_id AS booking_code
+     FROM lab_wallet_transactions lwt
+     LEFT JOIN bookings b ON lwt.reference_type = 'test_fee' AND lwt.reference_id = b.id
+     WHERE lwt.lab_id = ?
+     ORDER BY lwt.created_at DESC LIMIT ? OFFSET ?`,
+    [labId, limit, offset]
+  );
   return { transactions: rows, total: countResult[0].total, page, limit };
 };
 

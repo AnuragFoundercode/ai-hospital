@@ -131,7 +131,7 @@ const getProfile = async (req, res) => {
         registration_step: p.registration_step,
         verification_status: p.verification_status,
         rejection_reason: p.rejection_reason,
-        personal: clean({ full_name: p.full_name, email: p.email, dob: p.dob, gender: p.gender, profile_photo: p.profile_photo, zone_id: p.zone_id, zone_name: p.zone_name, city: p.city, state: p.state }),
+        personal: clean({ name: p.name, owner_name: p.owner_name, full_name: p.full_name, email: p.email, dob: p.dob, gender: p.gender, profile_photo: p.profile_photo, zone_id: p.zone_id, zone_name: p.zone_name, city: p.city, state: p.state }),
         license: clean({ driving_license_number: p.driving_license_number, license_expiry_date: p.license_expiry_date }),
         vehicle: clean({ ambulance_type_id: p.ambulance_type_id, vehicle_type_name: p.vehicle_type_name, vehicle_type_icon: p.vehicle_type_icon, vehicle_number: p.vehicle_number, vehicle_model: p.vehicle_model, vehicle_registration_date: p.vehicle_registration_date, insurance_valid_till: p.insurance_valid_till, base_fare: p.base_fare, per_km_charge: p.per_km_charge }),
         bank: bankRows[0] || null,

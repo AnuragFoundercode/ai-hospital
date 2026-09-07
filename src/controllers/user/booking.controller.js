@@ -8,6 +8,41 @@ const { pool } = require('../../config/database');
 const { sendToLab, sendToDoctor, sendToClient } = require('../../events/sse');
 const distanceService = require('../../services/distance.service');
 
+/**
+ * Notify provider (lab / diagnostic) in real-time of a newly-paid booking.
+ * Used by both manual /pay (confirmPayment) and the Paytm callback so both behave the same.
+ */
+const notifyProviderNewBooking = (updatedBooking) => {
+  try {
+    const metadata = typeof updatedBooking.metadata === 'string' ? JSON.parse(updatedBooking.metadata) : (updatedBooking.metadata || {});
+    if (updatedBooking.service_type === 'pathology_test') {
+      console.log(`📡 Sending SSE to lab_${updatedBooking.provider_id}`);
+      const sent = sendToLab(updatedBooking.provider_id, 'new_booking', {
+        booking_id: updatedBooking.booking_id,
+        date: updatedBooking.booking_date,
+        amount: updatedBooking.final_amount,
+        collection_type: metadata.collection_type,
+        tests: metadata.tests || [],
+        user_notes: updatedBooking.user_notes,
+      });
+      console.log(`📡 SSE sent: ${sent}`);
+    } else if (updatedBooking.service_type === 'diagnostic_scan') {
+      sendToClient(`diagnostic_${updatedBooking.provider_id}`, 'new_booking', {
+        booking_id: updatedBooking.booking_id,
+        date: updatedBooking.booking_date,
+        slot_time: updatedBooking.slot_start_time,
+        amount: updatedBooking.final_amount,
+        service_name: metadata.service_name,
+        patient_name: metadata.patient?.name,
+        booking_type: metadata.booking_type,
+        payment_method: updatedBooking.payment_method || 'online',
+      });
+    }
+  } catch (e) {
+    console.error('notifyProviderNewBooking error:', e.message);
+  }
+};
+
 // ─────────────────────────────────────────────
 // BOOKING CONTROLLER - For patient app
 // ─────────────────────────────────────────────
@@ -77,32 +112,8 @@ const confirmPayment = async (req, res) => {
     const updatedBooking = await bookingModel.findByBookingId(booking_id);
     bookingNotification.sendBookingConfirmedNotification(updatedBooking);
 
-    // Send SSE to lab/doctor for real-time popup
-    const metadata = typeof updatedBooking.metadata === 'string' ? JSON.parse(updatedBooking.metadata) : (updatedBooking.metadata || {});
-    if (updatedBooking.service_type === 'pathology_test') {
-      console.log(`📡 Sending SSE to lab_${updatedBooking.provider_id}`);
-      const sent = sendToLab(updatedBooking.provider_id, 'new_booking', {
-        booking_id: updatedBooking.booking_id,
-        date: updatedBooking.booking_date,
-        amount: updatedBooking.final_amount,
-        collection_type: metadata.collection_type,
-        tests: metadata.tests || [],
-        user_notes: updatedBooking.user_notes,
-      });
-      console.log(`📡 SSE sent: ${sent}`);
-    } else if (updatedBooking.service_type === 'diagnostic_scan') {
-      const { sendToClient } = require('../../events/sse');
-      sendToClient(`diagnostic_${updatedBooking.provider_id}`, 'new_booking', {
-        booking_id: updatedBooking.booking_id,
-        date: updatedBooking.booking_date,
-        slot_time: updatedBooking.slot_start_time,
-        amount: updatedBooking.final_amount,
-        service_name: metadata.service_name,
-        patient_name: metadata.patient?.name,
-        booking_type: metadata.booking_type,
-        payment_method: updatedBooking.payment_method || 'online',
-      });
-    }
+    // Real-time SSE to provider (lab / diagnostic)
+    notifyProviderNewBooking(updatedBooking);
 
     return res.status(200).json({      message: 'Payment successful. Booking confirmed!',
       data: {
@@ -280,61 +291,115 @@ const paytmCallback = async (req, res) => {
     // Verify checksum
     const isValid = paytmService.verifyChecksum(paytmParams);
     if (!isValid) {
-      return res.status(400).json({        message: 'Invalid checksum. Payment verification failed.',
-      });
+      return res.status(400).json({ message: 'Invalid checksum. Payment verification failed.' });
     }
 
     const orderId = paytmParams.ORDERID;
     const txnStatus = paytmParams.STATUS;
     const txnId = paytmParams.TXNID;
     const paymentMode = paytmParams.PAYMENTMODE;
+    const success = txnStatus === 'TXN_SUCCESS';
 
-    // Find booking
+    if (!orderId) return res.status(400).json({ message: 'ORDERID missing.' });
+
+    // Route by order-id prefix — ONE callback handles wallet / pharmacy order / ambulance / booking.
+    // WRC- = wallet recharge, ORD- = pharmacy order, AMB- = ambulance booking, else = generic booking (BK-)
+    const prefix = orderId.split('-')[0];
+
+    // ── WALLET RECHARGE ──
+    if (prefix === 'WRC') {
+      const walletModel = require('../../models/user/wallet.model');
+      if (!success) {
+        return res.status(200).json({ message: 'Wallet recharge failed.', data: { recharge_id: orderId, status: 'failed' } });
+      }
+      // Idempotency: don't double-credit
+      const [existing] = await pool.query(
+        "SELECT id FROM wallet_transactions WHERE reference_type = 'recharge' AND description = ?",
+        [`Wallet recharge - ${orderId}`]
+      );
+      if (existing.length) {
+        return res.status(200).json({ message: 'Already credited.', data: { recharge_id: orderId, status: 'paid' } });
+      }
+      // Get amount + user from Paytm verify (authoritative)
+      const verify = await paytmService.verifyTransaction(orderId);
+      const vb = verify.body || {};
+      if (vb.resultInfo?.resultStatus !== 'TXN_SUCCESS') {
+        return res.status(200).json({ message: 'Payment not confirmed.', data: { recharge_id: orderId } });
+      }
+      const amount = parseFloat(vb.txnAmount || paytmParams.TXNAMOUNT);
+      const custId = parseInt(vb.custId || paytmParams.custId);
+      if (custId && amount) {
+        await walletModel.credit(custId, amount, `Wallet recharge - ${orderId}`, 'recharge', null, 'user');
+      }
+      return res.status(200).json({ message: 'Wallet credited.', data: { recharge_id: orderId, amount, status: 'paid' } });
+    }
+
+    // ── PHARMACY ORDER ──
+    if (prefix === 'ORD') {
+      const [rows] = await pool.query('SELECT id, user_id, payment_status FROM pharmacy_orders WHERE order_id = ?', [orderId]);
+      if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
+      if (rows[0].payment_status === 'paid') {
+        return res.status(200).json({ message: 'Already paid.', data: { order_id: orderId, status: 'paid' } });
+      }
+      if (!success) {
+        return res.status(200).json({ message: 'Payment failed.', data: { order_id: orderId, payment_status: 'unpaid' } });
+      }
+      await pool.query("UPDATE pharmacy_orders SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE order_id = ?", [txnId, orderId]);
+      // Real-time SSE to pharmacy
+      const [ord] = await pool.query('SELECT id, pharmacy_id, total_items, final_amount FROM pharmacy_orders WHERE order_id = ?', [orderId]);
+      if (ord.length) {
+        sendToClient(`pharmacy_${ord[0].pharmacy_id}`, 'new_order', {
+          order_id: orderId, total_items: ord[0].total_items, amount: ord[0].final_amount, payment_method: 'online',
+        });
+      }
+      return res.status(200).json({ message: 'Order payment successful.', data: { order_id: orderId, payment_status: 'paid', transaction_id: txnId } });
+    }
+
+    // ── AMBULANCE BOOKING ──
+    if (prefix === 'AMB') {
+      const [rows] = await pool.query('SELECT id, payment_status FROM ambulance_bookings WHERE booking_id = ?', [orderId]);
+      if (!rows.length) return res.status(404).json({ message: 'Ambulance booking not found.' });
+      if (rows[0].payment_status === 'paid') {
+        return res.status(200).json({ message: 'Already paid.', data: { booking_id: orderId, status: 'paid' } });
+      }
+      if (!success) {
+        return res.status(200).json({ message: 'Payment failed.', data: { booking_id: orderId, payment_status: 'unpaid' } });
+      }
+      await pool.query("UPDATE ambulance_bookings SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE booking_id = ?", [txnId, orderId]);
+      // Real-time SSE to ambulance provider
+      const [amb] = await pool.query('SELECT partner_id, patient_name FROM ambulance_bookings WHERE booking_id = ?', [orderId]);
+      if (amb.length && amb[0].partner_id) {
+        sendToClient(`ambulance_${amb[0].partner_id}`, 'booking_paid', { booking_id: orderId, patient_name: amb[0].patient_name });
+      }
+      return res.status(200).json({ message: 'Ambulance payment successful.', data: { booking_id: orderId, payment_status: 'paid' } });
+    }
+
+    // ── BOOKING (doctor / lab / diagnostic — BK- or anything else) ──
     const booking = await bookingModel.findByBookingId(orderId);
     if (!booking) {
-      return res.status(404).json({        message: 'Booking not found.',
-      });
+      return res.status(404).json({ message: 'Booking not found.' });
+    }
+    if (booking.payment_status === 'paid') {
+      return res.status(200).json({ message: 'Already paid.', data: { booking_id: orderId, status: 'confirmed' } });
     }
 
-    if (txnStatus === 'TXN_SUCCESS') {
-      // Payment successful
-      await bookingModel.updatePayment(orderId, {
-        payment_status: 'paid',
-        transaction_id: txnId,
-        user_id: booking.user_id,
-      });
-
+    if (success) {
+      await bookingModel.updatePayment(orderId, { payment_status: 'paid', transaction_id: txnId, user_id: booking.user_id });
       await bookingModel.addStatusHistory(booking.id, 'pending', 'confirmed', 'system', null, `Paytm payment success. Mode: ${paymentMode}`);
 
-      // Send push notifications to user & doctor
       const updatedBooking = await bookingModel.findByBookingId(orderId);
       bookingNotification.sendBookingConfirmedNotification(updatedBooking);
+      // Real-time SSE to provider (lab / diagnostic) — same as manual /pay
+      notifyProviderNewBooking(updatedBooking);
 
-      return res.status(200).json({        message: 'Payment successful. Booking confirmed.',
-        data: {
-          booking_id: orderId,
-          status: 'confirmed',
-          payment_status: 'paid',
-          transaction_id: txnId,
-        },
-      });
-    } else {
-      // Payment failed
-      await bookingModel.addStatusHistory(booking.id, 'pending', 'pending', 'system', null, `Paytm payment failed: ${txnStatus}`);
-
-      return res.status(200).json({        message: 'Payment failed. Please try again.',
-        data: {
-          booking_id: orderId,
-          status: 'pending',
-          payment_status: 'unpaid',
-          reason: paytmParams.RESPMSG,
-        },
-      });
+      return res.status(200).json({ message: 'Payment successful. Booking confirmed.', data: { booking_id: orderId, status: 'confirmed', payment_status: 'paid', transaction_id: txnId } });
     }
+
+    await bookingModel.addStatusHistory(booking.id, 'pending', 'pending', 'system', null, `Paytm payment failed: ${txnStatus}`);
+    return res.status(200).json({ message: 'Payment failed. Please try again.', data: { booking_id: orderId, status: 'pending', payment_status: 'unpaid', reason: paytmParams.RESPMSG } });
   } catch (error) {
     console.error('paytmCallback error:', error.message);
-    return res.status(500).json({      message: 'Something went wrong.',
-    });
+    return res.status(500).json({ message: 'Something went wrong.' });
   }
 };
 
@@ -838,6 +903,28 @@ const createDiagnosticBooking = async (req, res) => {
       const duration = service.slot_duration_minutes_config || 30;
       const totalMins = parseInt(parts[1].slice(0, 2)) * 60 + parseInt(parts[1].slice(2)) + duration;
       slotEndTime = `${Math.floor(totalMins / 60).toString().padStart(2, '0')}:${(totalMins % 60).toString().padStart(2, '0')}`;
+
+      // 1) Slot must not be in the past (compare slot END datetime with now).
+      //    e.g. 09:00-10:00 slot -> after 10:00 it's expired.
+      const slotEndAt = new Date(`${booking_date}T${slotEndTime}:00`);
+      if (isNaN(slotEndAt.getTime())) {
+        return res.status(400).json({ message: 'Invalid slot or date.' });
+      }
+      if (slotEndAt.getTime() <= Date.now()) {
+        return res.status(400).json({ message: 'This slot has expired. You are delayed — please pick a later slot.', data: { reason: 'slot_expired' } });
+      }
+
+      // 2) One booking per slot: block if this slot is already taken (active booking).
+      const [taken] = await pool.query(
+        `SELECT id FROM bookings
+         WHERE service_type = 'diagnostic_scan' AND provider_id = ? AND booking_date = ? AND slot_start_time = ?
+               AND status NOT IN ('cancelled', 'failed')
+         LIMIT 1`,
+        [service.center_id, booking_date, slotTime]
+      );
+      if (taken.length) {
+        return res.status(409).json({ message: 'This slot is already booked. Please choose another slot.', data: { reason: 'slot_taken' } });
+      }
     }
 
     // Calculate pricing
@@ -935,7 +1022,7 @@ const createDiagnosticBooking = async (req, res) => {
       const { sendToClient: sendSSE } = require('../../events/sse');
       const sent = sendSSE(`diagnostic_${service.center_id}`, 'new_booking', {
         booking_id: booking.booking_id, date: booking_date, service_name: service.service_name,
-        amount: finalAmount, patient_name, slot_time: slotTime, payment_method: 'online',
+        amount: finalAmount, patient_name, slot_time: slotTime, booking_type: service.booking_type, payment_method: 'online',
       });
       console.log(`[SSE DEBUG] SSE sent result: ${sent}, center_id: ${service.center_id}`);
     } catch (notifErr) { console.error('Diagnostic notification error:', notifErr.message); }

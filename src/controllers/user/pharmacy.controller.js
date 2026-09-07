@@ -278,13 +278,13 @@ const createOrder = async (req, res) => {
     // Clear cart
     await pool.query('DELETE FROM pharmacy_cart WHERE user_id = ?', [userId]);
 
-    // SSE to pharmacy
-    const { sendToClient } = require('../../events/sse');
-    sendToClient(`pharmacy_${pharmacyId}`, 'new_order', { order_id: orderId, total_items: items.length, amount: finalAmount, payment_method });
-
     if (payment_method === 'cod') {
+      // COD → order is confirmed immediately, notify pharmacy now (like a paid order)
+      const { sendToClient } = require('../../events/sse');
+      sendToClient(`pharmacy_${pharmacyId}`, 'new_order', { order_id: orderId, total_items: items.length, amount: finalAmount, payment_method: 'cod' });
       return res.status(201).json({ message: 'Order placed! Pay on delivery.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, delivery_distance_km: deliveryDistanceKm, total: finalAmount }, payment_method: 'cod', status: 'pending', payment: null } });
     }
+    // Online → SSE goes only after payment is confirmed (Paytm callback / confirm-payment)
 
     // Online → Paytm
     let paytmData = null;
@@ -296,6 +296,37 @@ const createOrder = async (req, res) => {
 
     return res.status(201).json({ message: 'Order created. Complete payment.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, delivery_distance_km: deliveryDistanceKm, total: finalAmount }, payment_method: 'online', status: 'pending', payment: paytmData } });
   } catch (error) { console.error('pharmacy createOrder error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
+};
+
+/**
+ * POST /api/v1/user/pharmacy-order/:order_id/pay
+ * Body: { transaction_id }
+ * Manual payment confirmation (same behaviour as lab /pay) — marks order paid
+ * and sends real-time SSE to the pharmacy. Idempotent.
+ */
+const confirmOrderPayment = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { order_id } = req.params;
+    const { transaction_id } = req.body;
+    if (!transaction_id) return res.status(400).json({ message: 'transaction_id required.' });
+
+    const [rows] = await pool.query('SELECT id, pharmacy_id, total_items, final_amount, payment_status FROM pharmacy_orders WHERE order_id = ? AND user_id = ?', [order_id, userId]);
+    if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
+    const order = rows[0];
+
+    if (order.payment_status === 'paid') {
+      return res.status(200).json({ message: 'Already paid.', data: { order_id, payment_status: 'paid' } });
+    }
+
+    await pool.query("UPDATE pharmacy_orders SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE id = ?", [transaction_id, order.id]);
+
+    // Real-time SSE to pharmacy (order is now paid)
+    const { sendToClient } = require('../../events/sse');
+    sendToClient(`pharmacy_${order.pharmacy_id}`, 'new_order', { order_id, total_items: order.total_items, amount: order.final_amount, payment_method: 'online' });
+
+    return res.status(200).json({ message: 'Payment successful.', data: { order_id, payment_status: 'paid', transaction_id } });
+  } catch (error) { console.error('pharmacy confirmOrderPayment error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
 /**
@@ -559,4 +590,4 @@ const browseMedicines = async (req, res) => {
   } catch (error) { console.error('browseMedicines error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
-module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview, searchMedicines, browseMedicines };
+module.exports = { getCategories, getPharmacyList, getPharmacyDetail, getPharmacyMedicines, getMedicineDetail, addToCart, getCart, updateCartItem, removeFromCart, clearCart, createOrder, confirmOrderPayment, getOrders, getOrderDetail, getMedicineReviews, addMedicineReview, getPharmacyReviews, addPharmacyReview, searchMedicines, browseMedicines };

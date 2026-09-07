@@ -43,6 +43,10 @@ router.use('/pharmacy', pharmacyRoutes);
 const deliveryRoutes = require('./delivery/delivery.routes');
 router.use('/delivery', deliveryRoutes);
 
+// Blood Delivery Partner panel
+const bloodDeliveryRoutes = require('./blood-delivery/blood-delivery.routes');
+router.use('/blood-delivery', bloodDeliveryRoutes);
+
 // Sample Collector panel
 const collectorRoutes = require('./collector/collector.routes');
 router.use('/collector', collectorRoutes);

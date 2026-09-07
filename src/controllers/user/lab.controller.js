@@ -337,6 +337,8 @@ const getLabBookingDetail = async (req, res) => {
         collection_type: metadata.collection_type || null,
         sample_collection: sampleCollection,
         attachments: metadata.attachments || [],
+        reports: metadata.reports || [],
+        report_notes: metadata.report_notes || null,
         amount: { base: b.base_amount, discount: b.discount_amount, tax: b.tax_amount, total: b.final_amount },
         payment: { method: b.payment_method, status: b.payment_status, transaction_id: b.transaction_id, paid_at: b.paid_at },
         user_notes: b.user_notes,

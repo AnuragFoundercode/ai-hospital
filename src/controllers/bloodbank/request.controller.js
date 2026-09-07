@@ -5,6 +5,22 @@ const notificationService = require('../../services/notification.service');
 // BLOOD BANK REQUEST MANAGEMENT
 // ─────────────────────────────────────────────
 
+// Recompute summary (available = non-expired available bags) after stock changes.
+const refreshSummary = async (bankId, bloodGroup) => {
+  const [s] = await pool.query(
+    "SELECT COUNT(*) AS available, COALESCE(MAX(price_per_unit),0) AS price FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()",
+    [bankId, bloodGroup]
+  );
+  const available = s[0].available || 0;
+  const price = parseFloat(s[0].price) || 0;
+  const [exists] = await pool.query('SELECT id FROM bloodbank_inventory WHERE blood_bank_id = ? AND blood_group = ?', [bankId, bloodGroup]);
+  if (exists.length) {
+    await pool.query('UPDATE bloodbank_inventory SET available_units = ? WHERE blood_bank_id = ? AND blood_group = ?', [available, bankId, bloodGroup]);
+  } else {
+    await pool.query('INSERT INTO bloodbank_inventory (blood_bank_id, blood_group, available_units, price_per_unit) VALUES (?, ?, ?, ?)', [bankId, bloodGroup, available, price]);
+  }
+};
+
 /**
  * GET /api/v1/bloodbank/requests?status=pending|confirmed|ready|completed|rejected&page=1&limit=20
  */
@@ -149,15 +165,25 @@ const acceptRequest = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: 'Request not found.' });
     if (rows[0].status !== 'pending') return res.status(400).json({ message: `Cannot accept. Current status: ${rows[0].status}` });
 
-    // Reserve units in inventory
+    // Enough non-expired available bags? (1 bag = 1 unit)
+    const [avail] = await pool.query(
+      "SELECT COUNT(*) AS c FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()",
+      [bankId, rows[0].blood_group]
+    );
+    if (avail[0].c < rows[0].units_required) {
+      return res.status(400).json({ message: `Not enough ${rows[0].blood_group} stock. Available: ${avail[0].c}, required: ${rows[0].units_required}.` });
+    }
+
+    // Reserve exactly units_required bags — FEFO (earliest expiry first). 1 row = 1 unit so LIMIT is correct.
     await pool.query(
-      `UPDATE bloodbank_inventory_items SET status = 'reserved' 
-       WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' 
+      `UPDATE bloodbank_inventory_items SET status = 'reserved'
+       WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()
        ORDER BY expiry_date ASC LIMIT ?`,
       [bankId, rows[0].blood_group, rows[0].units_required]
     );
 
     await pool.query('UPDATE blood_requests SET status = ? WHERE id = ?', ['confirmed', rows[0].id]);
+    await refreshSummary(bankId, rows[0].blood_group);
 
     // Notify user
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [rows[0].user_id]);
@@ -192,14 +218,15 @@ const rejectRequest = async (req, res) => {
 
     await pool.query('UPDATE blood_requests SET status = ?, rejection_reason = ? WHERE id = ?', ['rejected', reason || null, rows[0].id]);
 
-    // If was confirmed, release reserved units
+    // If was confirmed, release reserved units back to available
     if (rows[0].status === 'confirmed') {
       await pool.query(
-        `UPDATE bloodbank_inventory_items SET status = 'available' 
-         WHERE blood_bank_id = ? AND blood_group = ? AND status = 'reserved' 
+        `UPDATE bloodbank_inventory_items SET status = 'available'
+         WHERE blood_bank_id = ? AND blood_group = ? AND status = 'reserved'
          ORDER BY expiry_date ASC LIMIT ?`,
         [bankId, rows[0].blood_group, rows[0].units_required || 1]
       );
+      await refreshSummary(bankId, rows[0].blood_group);
     }
 
     // Notify user
@@ -308,14 +335,8 @@ const markComplete = async (req, res) => {
       [bankId, bankEarning, `Blood request ${request_id} completed. Commission: ₹${adminCommission.toFixed(2)}`, rows[0].id, adminCommission, walletRow[0].balance]
     );
 
-    // Update summary table
-    const [summary] = await pool.query(
-      `SELECT SUM(CASE WHEN status = 'available' THEN units ELSE 0 END) as available
-       FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ?`,
-      [bankId, rows[0].blood_group]
-    );
-    await pool.query('UPDATE bloodbank_inventory SET available_units = ? WHERE blood_bank_id = ? AND blood_group = ?',
-      [summary[0].available || 0, bankId, rows[0].blood_group]);
+    // Refresh summary (available = non-expired available bags)
+    await refreshSummary(bankId, rows[0].blood_group);
 
     // Notify user
     const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [rows[0].user_id]);

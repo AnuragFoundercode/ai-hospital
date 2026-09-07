@@ -12,7 +12,7 @@ const addInventory = async (req, res) => {
   try {
     const bankId = req.bloodbank.id;
     const {
-      blood_group, units, blood_type, batch_number,
+      blood_group, units, price_per_unit, blood_type, batch_number,
       collection_date, expiry_date, storage_location, rack_number,
       donor_id, donor_name, test_report_url, collection_document_url, remarks
     } = req.body;
@@ -25,22 +25,36 @@ const addInventory = async (req, res) => {
     if (!totalUnits || totalUnits < 1) {
       return res.status(400).json({ message: 'units must be at least 1.' });
     }
+    const price = parseFloat(price_per_unit) || 0;
 
-    // One entry per batch. `units` holds the count of bags (1 bag = 1 unit).
-    // Individual bag numbers are derived on the fly in the detail API (not stored).
-    const [result] = await pool.query(
+    // 1 bag = 1 unit = 1 row. Create one row per bag with an auto bag number.
+    const groupTag = String(blood_group).replace(/[^A-Za-z0-9]/g, '');
+    const placeholders = [];
+    const values = [];
+    const bagNumbers = [];
+    for (let i = 1; i <= totalUnits; i++) {
+      const bagNumber = `${batch_number}-${groupTag}-${String(i).padStart(3, '0')}`;
+      bagNumbers.push(bagNumber);
+      placeholders.push('(?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      values.push(
+        bankId, blood_group, price, blood_type || 'whole_blood', batch_number, bagNumber,
+        collection_date, expiry_date, storage_location || 'main_refrigerator', rack_number || null,
+        donor_id || null, donor_name || null, test_report_url || null, collection_document_url || null, remarks || null
+      );
+    }
+
+    await pool.query(
       `INSERT INTO bloodbank_inventory_items
-        (blood_bank_id, blood_group, units, blood_type, batch_number, collection_date, expiry_date, storage_location, rack_number, donor_id, donor_name, test_report_url, collection_document_url, remarks)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [bankId, blood_group, totalUnits, blood_type || 'whole_blood', batch_number, collection_date, expiry_date, storage_location || 'main_refrigerator', rack_number || null, donor_id || null, donor_name || null, test_report_url || null, collection_document_url || null, remarks || null]
+        (blood_bank_id, blood_group, units, price_per_unit, blood_type, batch_number, bag_number, collection_date, expiry_date, storage_location, rack_number, donor_id, donor_name, test_report_url, collection_document_url, remarks)
+       VALUES ${placeholders.join(', ')}`,
+      values
     );
 
-    // Update summary table
     await updateInventorySummary(bankId, blood_group);
 
     return res.status(201).json({
-      message: 'Blood stock added.',
-      data: { id: result.insertId, blood_group, units: totalUnits, batch_number, status: 'available' },
+      message: `${totalUnits} unit(s) added (1 bag each).`,
+      data: { blood_group, batch_number, units: totalUnits, price_per_unit: price, bag_numbers: bagNumbers, status: 'available' },
     });
   } catch (error) {
     console.error('addInventory error:', error.message);
@@ -49,64 +63,64 @@ const addInventory = async (req, res) => {
 };
 
 /**
- * Build derived bag list from a batch entry (1 bag = 1 unit). Not stored in DB.
- */
-const buildBags = (item) => {
-  const groupTag = String(item.blood_group || '').replace(/[^A-Za-z0-9]/g, '');
-  const count = parseInt(item.units) || 0;
-  const bags = [];
-  for (let i = 1; i <= count; i++) {
-    bags.push({
-      bag_number: `${item.batch_number}-${groupTag}-${String(i).padStart(3, '0')}`,
-      units: 1,
-      status: item.status,
-    });
-  }
-  return bags;
-};
-
-/**
- * GET /api/v1/bloodbank/inventory?blood_group=&status=&page=1&limit=20
- * Inventory list (batch level)
+ * GET /api/v1/bloodbank/inventory?blood_group=&page=1&limit=20
+ * BATCH-WISE list. Each row = one batch with unit counts (total/available/reserved/dispatched).
+ * Use GET /inventory/batch/:batch_number for the individual bags inside a batch.
  */
 const getInventoryItems = async (req, res) => {
   try {
     const bankId = req.bloodbank.id;
-    const { blood_group, status, page = 1, limit = 20 } = req.query;
+    const { blood_group, page = 1, limit = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let where = ['blood_bank_id = ?'];
     let params = [bankId];
-
     if (blood_group) { where.push('blood_group = ?'); params.push(blood_group); }
-    if (status) { where.push('status = ?'); params.push(status); }
-
     const whereClause = where.join(' AND ');
 
-    const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM bloodbank_inventory_items WHERE ${whereClause}`, params);
+    // Count distinct batches
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) AS total FROM (
+         SELECT batch_number FROM bloodbank_inventory_items WHERE ${whereClause} GROUP BY batch_number, blood_group
+       ) t`,
+      params
+    );
+
+    // One row per batch with aggregated unit counts
     const [rows] = await pool.query(
-      `SELECT * FROM bloodbank_inventory_items WHERE ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT batch_number, blood_group, blood_type,
+              MAX(price_per_unit) AS price_per_unit,
+              MIN(collection_date) AS collection_date,
+              MIN(expiry_date) AS expiry_date,
+              COUNT(*) AS total_units,
+              SUM(CASE WHEN status = 'available' AND expiry_date >= CURDATE() THEN 1 ELSE 0 END) AS available_units,
+              SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END) AS reserved_units,
+              SUM(CASE WHEN status = 'dispatched' THEN 1 ELSE 0 END) AS dispatched_units,
+              SUM(CASE WHEN status = 'available' AND expiry_date < CURDATE() THEN 1 ELSE 0 END) AS expired_units,
+              MAX(created_at) AS created_at
+       FROM bloodbank_inventory_items
+       WHERE ${whereClause}
+       GROUP BY batch_number, blood_group, blood_type
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
 
     return res.status(200).json({
-      message: 'Inventory fetched.',
+      message: 'Inventory (batch-wise) fetched.',
       data: rows.map((r) => ({
-        id: r.id,
-        blood_group: r.blood_group,
-        units: r.units,
-        blood_type: r.blood_type,
         batch_number: r.batch_number,
+        blood_group: r.blood_group,
+        blood_type: r.blood_type,
+        price_per_unit: r.price_per_unit,
         collection_date: r.collection_date,
         expiry_date: r.expiry_date,
-        storage_location: r.storage_location,
-        rack_number: r.rack_number,
-        donor_id: r.donor_id,
-        donor_name: r.donor_name,
-        test_report_url: r.test_report_url,
-        collection_document_url: r.collection_document_url,
-        status: r.status,
-        remarks: r.remarks,
+        total_units: Number(r.total_units),
+        available_units: Number(r.available_units),
+        reserved_units: Number(r.reserved_units),
+        dispatched_units: Number(r.dispatched_units),
+        expired_units: Number(r.expired_units),
+        is_expired: r.expiry_date && new Date(r.expiry_date) < new Date(new Date().toDateString()),
         created_at: r.created_at,
       })),
       pagination: { page: parseInt(page), limit: parseInt(limit), total: countResult[0].total, total_pages: Math.ceil(countResult[0].total / parseInt(limit)) },
@@ -125,14 +139,17 @@ const getInventorySummary = async (req, res) => {
   try {
     const bankId = req.bloodbank.id;
 
+    // 1 bag = 1 unit. Count bags per group by state. (COUNT so numbers stay integers.)
     const [rows] = await pool.query(
       `SELECT blood_group,
-              SUM(units) as total_units,
-              SUM(CASE WHEN status = 'available' THEN units ELSE 0 END) as available_units,
-              SUM(CASE WHEN status = 'reserved' THEN units ELSE 0 END) as reserved_units,
-              SUM(CASE WHEN status = 'available' AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY) THEN units ELSE 0 END) as expire_soon
+              COUNT(*) AS total_units,
+              SUM(CASE WHEN status = 'available' AND expiry_date >= CURDATE() THEN 1 ELSE 0 END) AS available_units,
+              SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END) AS reserved_units,
+              SUM(CASE WHEN status = 'dispatched' THEN 1 ELSE 0 END) AS dispatched_units,
+              SUM(CASE WHEN status = 'available' AND expiry_date >= CURDATE() AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) AS expire_soon,
+              SUM(CASE WHEN status IN ('available','reserved') AND expiry_date < CURDATE() THEN 1 ELSE 0 END) AS expired_units
        FROM bloodbank_inventory_items
-       WHERE blood_bank_id = ? AND status IN ('available', 'reserved')
+       WHERE blood_bank_id = ?
        GROUP BY blood_group
        ORDER BY blood_group`,
       [bankId]
@@ -142,25 +159,35 @@ const getInventorySummary = async (req, res) => {
     let totalUnits = 0;
     let availableUnits = 0;
     let reservedUnits = 0;
+    let expiredUnits = 0;
     let lowStockGroups = 0;
 
     const groups = rows.map((r) => {
-      totalUnits += r.total_units;
-      availableUnits += r.available_units;
-      reservedUnits += r.reserved_units;
-      const isLow = r.available_units <= LOW_STOCK_THRESHOLD;
-      if (isLow) lowStockGroups++;
+      const total = Number(r.total_units) || 0;
+      const available = Number(r.available_units) || 0;
+      const reserved = Number(r.reserved_units) || 0;
+      const dispatched = Number(r.dispatched_units) || 0;
+      const expireSoon = Number(r.expire_soon) || 0;
+      const expired = Number(r.expired_units) || 0;
+
+      totalUnits += total;
+      availableUnits += available;
+      reservedUnits += reserved;
+      expiredUnits += expired;
+      if (available <= LOW_STOCK_THRESHOLD) lowStockGroups++;
 
       let statusLabel = 'healthy';
-      if (r.available_units <= 5) statusLabel = 'critical';
-      else if (r.available_units <= LOW_STOCK_THRESHOLD) statusLabel = 'low_stock';
+      if (available <= 5) statusLabel = 'critical';
+      else if (available <= LOW_STOCK_THRESHOLD) statusLabel = 'low_stock';
 
       return {
         blood_group: r.blood_group,
-        total_units: r.total_units,
-        available_units: r.available_units,
-        reserved_units: r.reserved_units,
-        expire_soon: r.expire_soon,
+        total_units: total,
+        available_units: available,
+        reserved_units: reserved,
+        dispatched_units: dispatched,
+        expire_soon: expireSoon,
+        expired_units: expired,
         status: statusLabel,
       };
     });
@@ -171,6 +198,7 @@ const getInventorySummary = async (req, res) => {
         total_units: totalUnits,
         available_units: availableUnits,
         reserved_units: reservedUnits,
+        expired_units: expiredUnits,
         low_stock_groups: lowStockGroups,
         groups,
       },
@@ -195,7 +223,8 @@ const updateInventoryItem = async (req, res) => {
       return res.status(404).json({ message: 'Inventory item not found.' });
     }
 
-    const allowedFields = ['units', 'blood_type', 'expiry_date', 'storage_location', 'rack_number', 'donor_id', 'donor_name', 'test_report_url', 'collection_document_url', 'status', 'remarks'];
+    // 1 row = 1 bag = 1 unit — units is fixed, not editable. price_per_unit is editable.
+    const allowedFields = ['price_per_unit', 'blood_type', 'expiry_date', 'storage_location', 'rack_number', 'donor_id', 'donor_name', 'test_report_url', 'collection_document_url', 'status', 'remarks'];
     const fields = [];
     const values = [];
 
@@ -251,25 +280,37 @@ const deleteInventoryItem = async (req, res) => {
  * Helper: Update bloodbank_inventory summary table from items
  */
 const updateInventorySummary = async (bankId, bloodGroup) => {
+  // Available = count of AVAILABLE, NON-EXPIRED bags (1 row = 1 unit).
+  // Price = latest price among available bags (fallback to any recent).
   const [summary] = await pool.query(
-    `SELECT SUM(CASE WHEN status = 'available' THEN units ELSE 0 END) as available
+    `SELECT COUNT(*) AS available,
+            COALESCE(MAX(price_per_unit), 0) AS price
      FROM bloodbank_inventory_items
-     WHERE blood_bank_id = ? AND blood_group = ?`,
+     WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()`,
     [bankId, bloodGroup]
   );
 
   const available = summary[0].available || 0;
+  let price = parseFloat(summary[0].price) || 0;
 
-  // Check if exists in summary table
+  // If no available bags, keep the last known price from any bag of this group
+  if (price === 0) {
+    const [p] = await pool.query(
+      'SELECT price_per_unit FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ? ORDER BY created_at DESC LIMIT 1',
+      [bankId, bloodGroup]
+    );
+    if (p.length) price = parseFloat(p[0].price_per_unit) || 0;
+  }
+
   const [existing] = await pool.query(
     'SELECT id FROM bloodbank_inventory WHERE blood_bank_id = ? AND blood_group = ?',
     [bankId, bloodGroup]
   );
 
   if (existing.length) {
-    await pool.query('UPDATE bloodbank_inventory SET available_units = ? WHERE blood_bank_id = ? AND blood_group = ?', [available, bankId, bloodGroup]);
+    await pool.query('UPDATE bloodbank_inventory SET available_units = ?, price_per_unit = ? WHERE blood_bank_id = ? AND blood_group = ?', [available, price, bankId, bloodGroup]);
   } else {
-    await pool.query('INSERT INTO bloodbank_inventory (blood_bank_id, blood_group, available_units) VALUES (?, ?, ?)', [bankId, bloodGroup, available]);
+    await pool.query('INSERT INTO bloodbank_inventory (blood_bank_id, blood_group, available_units, price_per_unit) VALUES (?, ?, ?, ?)', [bankId, bloodGroup, available, price]);
   }
 };
 
@@ -305,12 +346,12 @@ const getInventoryItemDetail = async (req, res) => {
         donor_name: r.donor_name,
         test_report_url: r.test_report_url,
         collection_document_url: r.collection_document_url,
+        bag_number: r.bag_number,
+        price_per_unit: r.price_per_unit,
         status: r.status,
         remarks: r.remarks,
         created_at: r.created_at,
         updated_at: r.updated_at,
-        // Individual bags derived from units (1 bag = 1 unit)
-        bags: buildBags(r),
       },
     });
   } catch (error) {
@@ -319,9 +360,93 @@ const getInventoryItemDetail = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/bloodbank/inventory/batch/:batch_number?blood_group=&status=
+ * All individual bags inside a batch (drill-down from the batch-wise list).
+ */
+const getBatchDetail = async (req, res) => {
+  try {
+    const bankId = req.bloodbank.id;
+    const { batch_number } = req.params;
+    const { blood_group, status, page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const where = ['blood_bank_id = ?', 'batch_number = ?'];
+    const params = [bankId, batch_number];
+    if (blood_group) { where.push('blood_group = ?'); params.push(blood_group); }
+    if (status) { where.push('status = ?'); params.push(status); }
+    const whereClause = where.join(' AND ');
+
+    // Full batch summary counts (not affected by status filter / pagination)
+    const [summaryRows] = await pool.query(
+      `SELECT blood_group, blood_type, MAX(price_per_unit) AS price_per_unit,
+              MIN(collection_date) AS collection_date, MIN(expiry_date) AS expiry_date,
+              COUNT(*) AS total_units,
+              SUM(CASE WHEN status = 'available' AND expiry_date >= CURDATE() THEN 1 ELSE 0 END) AS available_units,
+              SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END) AS reserved_units,
+              SUM(CASE WHEN status = 'dispatched' THEN 1 ELSE 0 END) AS dispatched_units
+       FROM bloodbank_inventory_items
+       WHERE blood_bank_id = ? AND batch_number = ?`,
+      [bankId, batch_number]
+    );
+    if (!summaryRows.length || !summaryRows[0].total_units) {
+      return res.status(404).json({ message: 'Batch not found.' });
+    }
+
+    const [countRows] = await pool.query(`SELECT COUNT(*) AS total FROM bloodbank_inventory_items WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT * FROM bloodbank_inventory_items WHERE ${whereClause} ORDER BY bag_number ASC LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    const today = new Date(new Date().toDateString());
+    const bags = rows.map((r) => ({
+      id: r.id,
+      bag_number: r.bag_number,
+      blood_group: r.blood_group,
+      blood_type: r.blood_type,
+      price_per_unit: r.price_per_unit,
+      collection_date: r.collection_date,
+      expiry_date: r.expiry_date,
+      storage_location: r.storage_location,
+      rack_number: r.rack_number,
+      donor_id: r.donor_id,
+      donor_name: r.donor_name,
+      test_report_url: r.test_report_url,
+      collection_document_url: r.collection_document_url,
+      status: r.status,
+      is_expired: r.expiry_date && new Date(r.expiry_date) < today,
+      remarks: r.remarks,
+    }));
+
+    const s = summaryRows[0];
+    return res.status(200).json({
+      message: 'Batch detail fetched.',
+      data: {
+        batch_number,
+        blood_group: s.blood_group,
+        blood_type: s.blood_type,
+        price_per_unit: s.price_per_unit,
+        collection_date: s.collection_date,
+        expiry_date: s.expiry_date,
+        total_units: Number(s.total_units),
+        available_units: Number(s.available_units),
+        reserved_units: Number(s.reserved_units),
+        dispatched_units: Number(s.dispatched_units),
+        bags,
+      },
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: countRows[0].total, total_pages: Math.ceil(countRows[0].total / parseInt(limit)) },
+    });
+  } catch (error) {
+    console.error('getBatchDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   addInventory,
   getInventoryItems,
+  getBatchDetail,
   getInventorySummary,
   getInventoryItemDetail,
   updateInventoryItem,

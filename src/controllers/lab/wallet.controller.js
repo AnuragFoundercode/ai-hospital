@@ -29,8 +29,15 @@ const getTransactions = async (req, res) => {
 
     return res.status(200).json({      message: 'Transactions fetched.',
       data: result.transactions.map((t) => ({
-        id: t.id, type: t.type, amount: t.amount, description: t.description,
-        reference_type: t.reference_type, balance_after: t.balance_after, created_at: t.created_at,
+        id: t.id,
+        transaction_id: t.id,
+        type: t.type,
+        amount: t.amount,
+        description: t.description,
+        reference_type: t.reference_type,
+        booking_id: t.booking_code || null,
+        balance_after: t.balance_after,
+        created_at: t.created_at,
       })),
       pagination: { page: result.page, limit: result.limit, total: result.total, total_pages: Math.ceil(result.total / result.limit) },
     });

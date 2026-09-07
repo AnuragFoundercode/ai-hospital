@@ -19,6 +19,7 @@ const sendOtp = async (req, res) => {
     const [collector] = await pool.query('SELECT id FROM sample_collectors WHERE mobile = ?', [mobile]);
     const [doctor] = await pool.query('SELECT id FROM doctors WHERE mobile = ?', [mobile]);
     const [ambulance] = await pool.query('SELECT id FROM ambulance_services WHERE mobile = ?', [mobile]);
+    const [bloodDelivery] = await pool.query('SELECT id FROM blood_delivery_partners WHERE mobile = ?', [mobile]);
 
     // Collect existing roles
     const existingRoles = [];
@@ -26,6 +27,7 @@ const sendOtp = async (req, res) => {
     if (collector.length) existingRoles.push('collector');
     if (doctor.length) existingRoles.push('doctor');
     if (ambulance.length) existingRoles.push('ambulance');
+    if (bloodDelivery.length) existingRoles.push('blood_delivery');
 
     console.log(`📱 Partner OTP for ${mobile}: ${STATIC_OTP}`);
     return res.status(200).json({
@@ -55,6 +57,7 @@ const verifyOtp = async (req, res) => {
     const [collectorRows] = await pool.query('SELECT * FROM sample_collectors WHERE mobile = ?', [mobile]);
     const [doctorRows] = await pool.query('SELECT * FROM doctors WHERE mobile = ?', [mobile]);
     const [ambulanceRows] = await pool.query('SELECT * FROM ambulance_services WHERE mobile = ?', [mobile]);
+    const [bloodDeliveryRows] = await pool.query('SELECT * FROM blood_delivery_partners WHERE mobile = ?', [mobile]);
 
     // Collect found roles
     const foundRoles = [];
@@ -62,6 +65,7 @@ const verifyOtp = async (req, res) => {
     if (collectorRows.length) foundRoles.push({ role: 'collector', data: collectorRows[0] });
     if (doctorRows.length) foundRoles.push({ role: 'doctor', data: doctorRows[0] });
     if (ambulanceRows.length) foundRoles.push({ role: 'ambulance', data: ambulanceRows[0] });
+    if (bloodDeliveryRows.length) foundRoles.push({ role: 'blood_delivery', data: bloodDeliveryRows[0] });
 
     // Already registered in exactly 1 role → auto login
     if (foundRoles.length === 1) {
@@ -90,6 +94,12 @@ const verifyOtp = async (req, res) => {
         const token = jwt.sign({ id: found.data.id, uuid: found.data.uuid, role: 'ambulance' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
         return res.status(200).json({ message: 'Login successful.', data: { token, role: 'ambulance', is_new_user: !found.data.full_name, registration_step: found.data.registration_step || 0, verification_status: found.data.verification_status, partner: { id: found.data.uuid, full_name: found.data.full_name, mobile } } });
       }
+
+      if (found.role === 'blood_delivery') {
+        if (fcm_token) await pool.query('UPDATE blood_delivery_partners SET fcm_token = ?, is_verified_mobile = 1 WHERE id = ?', [fcm_token, found.data.id]);
+        const token = jwt.sign({ id: found.data.id, uuid: found.data.uuid, role: 'blood_delivery' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+        return res.status(200).json({ message: 'Login successful.', data: { token, role: 'blood_delivery', is_new_user: !found.data.full_name, registration_step: found.data.registration_step || 0, verification_status: found.data.verification_status, partner: { id: found.data.uuid, full_name: found.data.full_name, mobile } } });
+      }
     }
 
     // Multiple roles (rare) → let user pick
@@ -98,7 +108,7 @@ const verifyOtp = async (req, res) => {
     }
 
     // New user → not in any table → select role to register
-    return res.status(200).json({ message: 'OTP verified. Select your role to register.', data: { is_new_user: true, select_role: true, available_roles: ['delivery', 'collector', 'doctor', 'ambulance'], mobile } });
+    return res.status(200).json({ message: 'OTP verified. Select your role to register.', data: { is_new_user: true, select_role: true, available_roles: ['delivery', 'collector', 'doctor', 'ambulance', 'blood_delivery'], mobile } });
 
   } catch (error) { console.error('partner-auth verifyOtp error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -113,14 +123,15 @@ const selectRole = async (req, res) => {
   try {
     const { mobile, role, fcm_token } = req.body;
     if (!mobile || !role) return res.status(400).json({ message: 'mobile and role required.' });
-    if (!['delivery', 'collector', 'doctor', 'ambulance'].includes(role)) return res.status(400).json({ message: 'role must be "delivery", "collector", "doctor", or "ambulance".' });
+    if (!['delivery', 'collector', 'doctor', 'ambulance', 'blood_delivery'].includes(role)) return res.status(400).json({ message: 'role must be "delivery", "collector", "doctor", "ambulance", or "blood_delivery".' });
 
     // Enforce 1 mobile = 1 role
     const [d] = await pool.query('SELECT id FROM delivery_partners WHERE mobile = ?', [mobile]);
     const [c] = await pool.query('SELECT id FROM sample_collectors WHERE mobile = ?', [mobile]);
     const [doc] = await pool.query('SELECT id FROM doctors WHERE mobile = ?', [mobile]);
     const [amb] = await pool.query('SELECT id FROM ambulance_services WHERE mobile = ?', [mobile]);
-    if (d.length || c.length || doc.length || amb.length) {
+    const [bd] = await pool.query('SELECT id FROM blood_delivery_partners WHERE mobile = ?', [mobile]);
+    if (d.length || c.length || doc.length || amb.length || bd.length) {
       return res.status(409).json({ message: 'This mobile is already registered. One mobile can only have one role.' });
     }
 
@@ -155,6 +166,14 @@ const selectRole = async (req, res) => {
       const [rows] = await pool.query('SELECT * FROM ambulance_services WHERE mobile = ?', [mobile]);
       const token = jwt.sign({ id: rows[0].id, uuid: rows[0].uuid, role: 'ambulance' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
       return res.status(201).json({ message: 'Registered as Ambulance Partner.', data: { token, role: 'ambulance', is_new_user: true, registration_step: 0, verification_status: 'incomplete', partner: { id: rows[0].uuid, full_name: null, mobile } } });
+    }
+
+    if (role === 'blood_delivery') {
+      const uuid = uuidv4();
+      await pool.query('INSERT INTO blood_delivery_partners (uuid, mobile, is_verified_mobile, fcm_token) VALUES (?, ?, 1, ?)', [uuid, mobile, fcm_token || null]);
+      const [rows] = await pool.query('SELECT * FROM blood_delivery_partners WHERE mobile = ?', [mobile]);
+      const token = jwt.sign({ id: rows[0].id, uuid: rows[0].uuid, role: 'blood_delivery' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+      return res.status(201).json({ message: 'Registered as Blood Delivery Partner.', data: { token, role: 'blood_delivery', is_new_user: true, registration_step: 0, verification_status: 'incomplete', partner: { id: rows[0].uuid, full_name: null, mobile } } });
     }
   } catch (error) { console.error('partner-auth selectRole error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };

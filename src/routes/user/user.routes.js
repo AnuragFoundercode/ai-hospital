@@ -139,6 +139,7 @@ router.delete('/pharmacy-cart/clear', userAuth, pharmacyController.clearCart);
 router.put('/pharmacy-cart/:id', userAuth, pharmacyController.updateCartItem);
 router.delete('/pharmacy-cart/:id', userAuth, pharmacyController.removeFromCart);
 router.post('/pharmacy-order', userAuth, pharmacyController.createOrder);
+router.post('/pharmacy-order/:order_id/pay', userAuth, pharmacyController.confirmOrderPayment);
 router.get('/pharmacy-orders', userAuth, pharmacyController.getOrders);
 router.get('/pharmacy-order/:order_id', userAuth, pharmacyController.getOrderDetail);
 router.post('/pharmacy-review', userAuth, pharmacyController.addPharmacyReview);
