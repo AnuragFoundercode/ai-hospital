@@ -213,8 +213,9 @@ const bookAmbulance = async (req, res) => {
       } catch (e) { paytmData = { txn_token: null, order_id: bookingId, error: e.message }; }
     }
 
-    // Notify ambulance provider (FCM + SSE)
-    {
+    // Notify ambulance provider (FCM + SSE) — ONLY for cash (confirmed now).
+    // For online, the provider is notified after payment success via the Paytm callback.
+    if (payment_method === 'cash') {
       const { notify } = require('../../services/notify');
       await notify('ambulance_service', amb.id, {
         title: 'New Ambulance Booking 🚑',
@@ -223,9 +224,9 @@ const bookAmbulance = async (req, res) => {
         data: { event: 'new_ambulance_booking', booking_id: bookingId },
         fcmToken: amb.fcm_token,
       });
+      const { sendToClient } = require('../../events/sse');
+      sendToClient(`ambulance_${amb.id}`, 'new_booking', { booking_id: bookingId, pickup_address: pickup.address_line1, drop_address, fare: totalFare.toFixed(2), patient_name });
     }
-    const { sendToClient } = require('../../events/sse');
-    sendToClient(`ambulance_${amb.id}`, 'new_booking', { booking_id: bookingId, pickup_address: pickup.address_line1, drop_address, fare: totalFare.toFixed(2), patient_name });
 
     return res.status(201).json({
       message: payment_method === 'cash' ? 'Ambulance booked! Pay in cash.' : 'Ambulance booked! Complete payment.',

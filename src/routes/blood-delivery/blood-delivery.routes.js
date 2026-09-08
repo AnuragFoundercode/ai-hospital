@@ -21,6 +21,15 @@ router.get('/profile', bloodDeliveryAuth, bloodDeliveryController.getProfile);
 router.put('/toggle-online', bloodDeliveryAuth, bloodDeliveryController.toggleOnline);
 router.put('/location', bloodDeliveryAuth, bloodDeliveryController.updateLocation);
 
+// Delivery Requests
+router.get('/active', bloodDeliveryAuth, bloodDeliveryController.getActiveDelivery);
+router.get('/requests', bloodDeliveryAuth, bloodDeliveryController.getDeliveryRequests);
+router.put('/request/:id/accept', bloodDeliveryAuth, bloodDeliveryController.acceptDelivery);
+router.put('/request/:id/reject', bloodDeliveryAuth, bloodDeliveryController.rejectDelivery);
+router.put('/request/:id/picked-up', bloodDeliveryAuth, bloodDeliveryController.markPickedUp);
+router.put('/request/:id/reached', bloodDeliveryAuth, bloodDeliveryController.markReached);
+router.put('/request/:id/delivered', bloodDeliveryAuth, bloodDeliveryController.markDelivered);
+
 // History & Earnings
 router.get('/history', bloodDeliveryAuth, bloodDeliveryController.getDeliveryHistory);
 router.get('/earnings', bloodDeliveryAuth, bloodDeliveryController.getEarnings);

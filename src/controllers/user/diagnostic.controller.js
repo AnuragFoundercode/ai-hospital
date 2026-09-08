@@ -462,6 +462,79 @@ const getServiceSlots = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/user/diagnostic-history?booking_type=appointment|walk_in&status=&page=1&limit=10
+ * Dedicated diagnostic booking history for the logged-in user.
+ * Filters: booking_type (appointment/walk_in), status. Includes reports.
+ */
+const getDiagnosticHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { booking_type, status, page = 1, limit = 10 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let where = ["b.user_id = ?", "b.service_type = 'diagnostic_scan'"];
+    let params = [userId];
+
+    if (status) { where.push('b.status = ?'); params.push(status); }
+    // booking_type lives inside metadata JSON
+    if (booking_type) { where.push("JSON_EXTRACT(b.metadata, '$.booking_type') = ?"); params.push(booking_type); }
+
+    const whereClause = where.join(' AND ');
+
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM bookings b WHERE ${whereClause}`,
+      params
+    );
+
+    const [rows] = await pool.query(
+      `SELECT b.booking_id, b.status, b.payment_status, b.final_amount, b.booking_date, b.slot_start_time, b.slot_end_time, b.metadata, b.completed_at, b.created_at,
+              dc.uuid as center_uuid, dc.name as center_name, dc.profile_photo as center_photo
+       FROM bookings b
+       LEFT JOIN diagnostic_centers dc ON b.provider_id = dc.id
+       WHERE ${whereClause}
+       ORDER BY b.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    const data = rows.map((b) => {
+      const metadata = typeof b.metadata === 'string' ? JSON.parse(b.metadata) : (b.metadata || {});
+      return {
+        booking_id: b.booking_id,
+        service_name: metadata.service_name || null,
+        booking_type: metadata.booking_type || null,
+        status: b.status,
+        payment_status: b.payment_status,
+        amount: b.final_amount,
+        date: b.booking_date,
+        slot_time: b.slot_start_time,
+        slot_end_time: b.slot_end_time,
+        patient_name: metadata.patient?.name || null,
+        center: b.center_uuid ? { id: b.center_uuid, name: b.center_name, profile_photo: b.center_photo } : null,
+        reports: metadata.reports && metadata.reports.length ? metadata.reports : [],
+        report_notes: metadata.report_notes || null,
+        completed_at: b.completed_at,
+        created_at: b.created_at,
+      };
+    });
+
+    return res.status(200).json({
+      message: 'Diagnostic history fetched.',
+      data,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: countResult[0].total,
+        total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    console.error('user getDiagnosticHistory error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getCategories,
   getDiagnosticList,
@@ -469,4 +542,5 @@ module.exports = {
   getDiagnosticServices,
   getServiceDetail,
   getServiceSlots,
+  getDiagnosticHistory,
 };

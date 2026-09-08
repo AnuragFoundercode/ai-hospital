@@ -282,6 +282,15 @@ const createOrder = async (req, res) => {
       // COD → order is confirmed immediately, notify pharmacy now (like a paid order)
       const { sendToClient } = require('../../events/sse');
       sendToClient(`pharmacy_${pharmacyId}`, 'new_order', { order_id: orderId, total_items: items.length, amount: finalAmount, payment_method: 'cod' });
+      // Notify user (order placed)
+      const { notify } = require('../../services/notify');
+      const [newOrder] = await pool.query('SELECT id FROM pharmacy_orders WHERE order_id = ?', [orderId]);
+      await notify('user', userId, {
+        title: 'Order Placed 🎉',
+        body: 'Your medicine order is placed. Pay on delivery.',
+        type: 'order', reference_type: 'order', reference_id: newOrder[0]?.id || null,
+        data: { event: 'order_placed', order_id: orderId },
+      });
       return res.status(201).json({ message: 'Order placed! Pay on delivery.', data: { order_id: orderId, total_items: items.length, amount: { base: baseAmount, discount: discountAmount, delivery: deliveryCharge, delivery_distance_km: deliveryDistanceKm, total: finalAmount }, payment_method: 'cod', status: 'pending', payment: null } });
     }
     // Online → SSE goes only after payment is confirmed (Paytm callback / confirm-payment)
@@ -324,6 +333,15 @@ const confirmOrderPayment = async (req, res) => {
     // Real-time SSE to pharmacy (order is now paid)
     const { sendToClient } = require('../../events/sse');
     sendToClient(`pharmacy_${order.pharmacy_id}`, 'new_order', { order_id, total_items: order.total_items, amount: order.final_amount, payment_method: 'online' });
+
+    // Notify user (order confirmed)
+    const { notify } = require('../../services/notify');
+    await notify('user', userId, {
+      title: 'Order Confirmed 🎉',
+      body: 'Your medicine order is confirmed and being processed.',
+      type: 'order', reference_type: 'order', reference_id: order.id,
+      data: { event: 'order_confirmed', order_id },
+    });
 
     return res.status(200).json({ message: 'Payment successful.', data: { order_id, payment_status: 'paid', transaction_id } });
   } catch (error) { console.error('pharmacy confirmOrderPayment error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }

@@ -113,11 +113,13 @@ router.get('/diagnostic/:id', userAuth, diagnosticController.getDiagnosticDetail
 router.get('/diagnostic/:id/services', userAuth, diagnosticController.getDiagnosticServices);
 router.get('/diagnostic-service/:id', userAuth, diagnosticController.getServiceDetail);
 router.get('/diagnostic-service/:id/slots', userAuth, diagnosticController.getServiceSlots);
+router.get('/diagnostic-history', userAuth, diagnosticController.getDiagnosticHistory);
 
 // Blood Bank APIs (token required)
 router.get('/blood-banks', userAuth, bloodbankController.getBloodBankList);
 router.get('/blood-bank/:id', userAuth, bloodbankController.getBloodBankDetail);
 router.get('/blood-bank/:id/availability', userAuth, bloodbankController.getBloodAvailability);
+router.get('/blood-delivery-quote', userAuth, bloodbankController.getBloodDeliveryQuote);
 router.post('/blood-request', userAuth, bloodbankController.requestBlood);
 router.get('/blood-requests', userAuth, bloodbankController.getBloodRequests);
 router.get('/blood-request/:request_id', userAuth, bloodbankController.getBloodRequestDetail);

@@ -265,9 +265,40 @@ const updateStatus = async (req, res) => {
 
     const booking = rows[0];
 
+    // ── Enforce the diagnostic status flow (no jumping / no going back) ──
+    // pending → confirmed → patient_arrived → scan_started → scan_completed → report_uploaded → completed
+    // (cancelled is terminal; set only via /reject)
+    const ALLOWED_NEXT = {
+      pending: ['confirmed'],
+      confirmed: ['patient_arrived'],
+      patient_arrived: ['scan_started'],
+      scan_started: ['scan_completed'],
+      scan_completed: ['report_uploaded'],
+      report_uploaded: ['completed'],
+      completed: [],
+      cancelled: [],
+    };
+
     // Prevent no-op / duplicate same-status updates
     if (booking.status === status) {
       return res.status(400).json({ message: `Booking is already '${status}'.` });
+    }
+
+    const allowedNext = ALLOWED_NEXT[booking.status] || [];
+    if (!allowedNext.includes(status)) {
+      const nextHint = allowedNext.length ? allowedNext.join(', ') : 'none (this booking is closed)';
+      return res.status(400).json({
+        message: `Invalid status change. From '${booking.status}' you can only move to: ${nextHint}.`,
+        data: { current_status: booking.status, requested_status: status, allowed_next: allowedNext },
+      });
+    }
+
+    // Report must be uploaded before completing
+    if (status === 'report_uploaded') {
+      const md = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
+      if (!md.reports || !md.reports.length) {
+        return res.status(400).json({ message: 'Upload the report first (no report found for this booking).' });
+      }
     }
 
     // Store the ACTUAL status (no mapping) — single status field manages everything
@@ -326,11 +357,22 @@ const uploadReport = async (req, res) => {
     const booking = rows[0];
     const metadata = typeof booking.metadata === 'string' ? JSON.parse(booking.metadata) : (booking.metadata || {});
 
+    // Report can only be uploaded once the scan is done (or already at report stage)
+    if (!['scan_completed', 'report_uploaded'].includes(booking.status)) {
+      return res.status(400).json({ message: `Report can be uploaded only after 'scan_completed'. Current status: '${booking.status}'.` });
+    }
+
     if (!metadata.reports) metadata.reports = [];
     metadata.reports = [...metadata.reports, ...reports];
     if (report_notes) metadata.report_notes = report_notes;
 
-    await pool.query('UPDATE bookings SET metadata = ? WHERE id = ?', [JSON.stringify(metadata), booking.id]);
+    // Move status forward to report_uploaded (if not already) and save reports
+    const moveToReportUploaded = booking.status === 'scan_completed';
+    if (moveToReportUploaded) {
+      await pool.query("UPDATE bookings SET metadata = ?, status = 'report_uploaded' WHERE id = ?", [JSON.stringify(metadata), booking.id]);
+    } else {
+      await pool.query('UPDATE bookings SET metadata = ? WHERE id = ?', [JSON.stringify(metadata), booking.id]);
+    }
     await pool.query("INSERT INTO booking_status_history (booking_id, from_status, to_status, changed_by_type, changed_by_id, remarks) VALUES (?, ?, 'report_uploaded', 'provider', ?, 'Report uploaded')", [booking.id, booking.status, centerId]);
 
     // Notify user

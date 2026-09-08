@@ -1,9 +1,94 @@
 const { pool } = require('../../config/database');
 const notificationService = require('../../services/notification.service');
+const distanceService = require('../../services/distance.service');
+const { notify } = require('../../services/notify');
+const { sendToClient } = require('../../events/sse');
 
 // ─────────────────────────────────────────────
 // BLOOD BANK REQUEST MANAGEMENT
 // ─────────────────────────────────────────────
+
+// Create a blood_delivery_requests row (status 'searching') for a ready blood request
+// and broadcast it to nearby online, approved blood delivery partners.
+// Idempotent: skips if a live delivery request already exists for this blood request.
+const createBloodDeliveryRequest = async (bankId, request) => {
+  try {
+    // Skip if already created / in progress
+    const [existing] = await pool.query(
+      "SELECT id FROM blood_delivery_requests WHERE blood_request_id = ? AND status NOT IN ('cancelled')",
+      [request.id]
+    );
+    if (existing.length) return;
+
+    const [bankRows] = await pool.query('SELECT latitude, longitude, address_line1, city FROM blood_banks WHERE id = ?', [bankId]);
+    if (!bankRows.length) return;
+    const bank = bankRows[0];
+
+    const pickupLat = parseFloat(bank.latitude);
+    const pickupLng = parseFloat(bank.longitude);
+    const dropLat = parseFloat(request.drop_latitude);
+    const dropLng = parseFloat(request.drop_longitude);
+    if (!pickupLat || !pickupLng || !dropLat || !dropLng) return; // can't route without coords
+
+    // Fee/distance already computed & paid by the user at request time.
+    const [perKmRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'blood_delivery_per_km_charge'");
+    const perKmCharge = perKmRows.length ? parseFloat(perKmRows[0].config_value) : 15;
+    const distanceKm = parseFloat(request.delivery_distance_km) || 0;
+    const deliveryFee = parseFloat(request.delivery_fee) || 0;
+    // Commission is deducted per-partner at accept time; earning shown as full fee until then.
+    const deliveryEarning = deliveryFee;
+
+    const deliveryReqId = `BDL-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const [ins] = await pool.query(
+      "INSERT INTO blood_delivery_requests (request_id, blood_request_id, blood_bank_id, pickup_address, pickup_latitude, pickup_longitude, drop_address, drop_latitude, drop_longitude, distance_km, per_km_charge, delivery_fee, delivery_earning, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching')",
+      [deliveryReqId, request.id, bankId, `${bank.address_line1}, ${bank.city}`, pickupLat, pickupLng, request.drop_address || '', dropLat, dropLng, distanceKm.toFixed(2), perKmCharge, deliveryFee, deliveryEarning]
+    );
+    await pool.query('UPDATE blood_requests SET delivery_request_id = ? WHERE id = ?', [ins.insertId, request.id]);
+
+    // Broadcast to nearby online approved blood delivery partners
+    const [radiusRows] = await pool.query("SELECT config_value FROM admin_config WHERE config_key = 'blood_delivery_search_radius_km'");
+    const searchRadius = radiusRows.length ? parseFloat(radiusRows[0].config_value) : 5;
+    const [nearbyPartners] = await pool.query(
+      "SELECT id, fcm_token FROM blood_delivery_partners WHERE is_online = 1 AND is_active = 1 AND verification_status = 'approved' AND latitude IS NOT NULL AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?",
+      [pickupLat, pickupLng, pickupLat, searchRadius]
+    );
+
+    for (const dp of nearbyPartners) {
+      sendToClient(`blood_delivery_${dp.id}`, 'new_delivery_request', {
+        request_id: deliveryReqId, pickup_address: `${bank.address_line1}, ${bank.city}`, distance_km: distanceKm.toFixed(2), earning: deliveryEarning,
+      });
+      await notify('blood_delivery_partner', dp.id, {
+        title: 'New Blood Delivery 🩸',
+        body: `₹${deliveryEarning} | ${distanceKm.toFixed(1)} km`,
+        type: 'order', reference_type: 'blood_delivery_request', reference_id: ins.insertId, reference_code: deliveryReqId,
+        data: { event: 'new_blood_delivery', request_id: deliveryReqId },
+        fcmToken: dp.fcm_token,
+      });
+    }
+  } catch (e) {
+    console.error('createBloodDeliveryRequest error:', e.message);
+  }
+};
+
+// Ensure the request has its units reserved (FEFO). Reserves only the shortfall,
+// so it is safe to call whether or not the request was explicitly accepted.
+const ensureReserved = async (bankId, bloodGroup, unitsRequired, requestId) => {
+  // Count bags currently reserved for this blood group at this bank.
+  // (Reservation is per group/bank pool; markComplete/markDelivered dispatch the same pool.)
+  const [reserved] = await pool.query(
+    "SELECT COUNT(*) AS c FROM bloodbank_inventory_items WHERE blood_bank_id = ? AND blood_group = ? AND status = 'reserved'",
+    [bankId, bloodGroup]
+  );
+  const shortfall = unitsRequired - (reserved[0].c || 0);
+  if (shortfall > 0) {
+    await pool.query(
+      `UPDATE bloodbank_inventory_items SET status = 'reserved'
+       WHERE blood_bank_id = ? AND blood_group = ? AND status = 'available' AND expiry_date >= CURDATE()
+       ORDER BY expiry_date ASC LIMIT ?`,
+      [bankId, bloodGroup, shortfall]
+    );
+  }
+};
 
 // Recompute summary (available = non-expired available bags) after stock changes.
 const refreshSummary = async (bankId, bloodGroup) => {
@@ -163,7 +248,9 @@ const acceptRequest = async (req, res) => {
     );
 
     if (!rows.length) return res.status(404).json({ message: 'Request not found.' });
-    if (rows[0].status !== 'pending') return res.status(400).json({ message: `Cannot accept. Current status: ${rows[0].status}` });
+    // Accept from 'pending' (offline/online-unpaid) or 'confirmed' (online paid / offline auto-confirmed).
+    // Reserving is idempotent-ish: we only reserve if this request has no reserved bags yet.
+    if (!['pending', 'confirmed'].includes(rows[0].status)) return res.status(400).json({ message: `Cannot accept. Current status: ${rows[0].status}` });
 
     // Enough non-expired available bags? (1 bag = 1 unit)
     const [avail] = await pool.query(
@@ -251,22 +338,30 @@ const markReady = async (req, res) => {
     const { request_id } = req.params;
 
     const [rows] = await pool.query(
-      'SELECT id, status, user_id FROM blood_requests WHERE request_id = ? AND blood_bank_id = ?',
+      'SELECT * FROM blood_requests WHERE request_id = ? AND blood_bank_id = ?',
       [request_id, bankId]
     );
 
     if (!rows.length) return res.status(404).json({ message: 'Request not found.' });
     if (rows[0].status !== 'confirmed') return res.status(400).json({ message: `Cannot mark ready. Current status: ${rows[0].status}` });
 
-    await pool.query('UPDATE blood_requests SET status = ? WHERE id = ?', ['ready', rows[0].id]);
+    const request = rows[0];
+    await pool.query('UPDATE blood_requests SET status = ? WHERE id = ?', ['ready', request.id]);
 
     // Notify user
-    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [rows[0].user_id]);
+    const [userRows] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [request.user_id]);
     if (userRows[0]?.fcm_token) {
-      await notificationService.sendToDevice(userRows[0].fcm_token, 'Blood Ready for Pickup 🩸', 'Your blood units are ready. Please collect from blood bank.', { type: 'blood_ready', request_id });
+      await notificationService.sendToDevice(userRows[0].fcm_token, 'Blood Ready 🩸', 'Your blood units are ready. A delivery partner will be assigned shortly.', { type: 'blood_ready', request_id });
     }
 
-    return res.status(200).json({ message: 'Marked as ready.', data: { status: 'ready' } });
+    // Make sure the units are reserved (covers requests confirmed via payment without an explicit accept)
+    await ensureReserved(bankId, request.blood_group, request.units_required, request.id);
+    await refreshSummary(bankId, request.blood_group);
+
+    // Create a blood delivery request and broadcast to nearby blood delivery partners
+    await createBloodDeliveryRequest(bankId, request);
+
+    return res.status(200).json({ message: 'Marked as ready. Searching for a delivery partner.', data: { status: 'ready' } });
   } catch (error) {
     console.error('markReady error:', error.message);
     return res.status(500).json({ message: 'Something went wrong.' });

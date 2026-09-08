@@ -7,17 +7,18 @@ const bookingNotification = require('../../services/booking.notification');
 const { pool } = require('../../config/database');
 const { sendToLab, sendToDoctor, sendToClient } = require('../../events/sse');
 const distanceService = require('../../services/distance.service');
+const { notify } = require('../../services/notify');
 
 /**
  * Notify provider (lab / diagnostic) in real-time of a newly-paid booking.
  * Used by both manual /pay (confirmPayment) and the Paytm callback so both behave the same.
  */
-const notifyProviderNewBooking = (updatedBooking) => {
+const notifyProviderNewBooking = async (updatedBooking) => {
   try {
     const metadata = typeof updatedBooking.metadata === 'string' ? JSON.parse(updatedBooking.metadata) : (updatedBooking.metadata || {});
     if (updatedBooking.service_type === 'pathology_test') {
-      console.log(`📡 Sending SSE to lab_${updatedBooking.provider_id}`);
-      const sent = sendToLab(updatedBooking.provider_id, 'new_booking', {
+      // SSE (real-time in-app)
+      sendToLab(updatedBooking.provider_id, 'new_booking', {
         booking_id: updatedBooking.booking_id,
         date: updatedBooking.booking_date,
         amount: updatedBooking.final_amount,
@@ -25,7 +26,13 @@ const notifyProviderNewBooking = (updatedBooking) => {
         tests: metadata.tests || [],
         user_notes: updatedBooking.user_notes,
       });
-      console.log(`📡 SSE sent: ${sent}`);
+      // FCM + DB (background/data)
+      const testLine = metadata.tests && metadata.tests.length ? metadata.tests.map((t) => t.name || t).join(', ') : 'lab test';
+      await notify('pathology_lab', updatedBooking.provider_id, {
+        title: 'New Booking 📋', body: `New lab test booking (${testLine}).`,
+        type: 'booking', reference_type: 'booking', reference_id: updatedBooking.id,
+        data: { event: 'new_booking', booking_id: updatedBooking.booking_id },
+      });
     } else if (updatedBooking.service_type === 'diagnostic_scan') {
       sendToClient(`diagnostic_${updatedBooking.provider_id}`, 'new_booking', {
         booking_id: updatedBooking.booking_id,
@@ -36,6 +43,11 @@ const notifyProviderNewBooking = (updatedBooking) => {
         patient_name: metadata.patient?.name,
         booking_type: metadata.booking_type,
         payment_method: updatedBooking.payment_method || 'online',
+      });
+      await notify('diagnostic_center', updatedBooking.provider_id, {
+        title: 'New Booking 📋', body: `New ${metadata.service_name || 'diagnostic'} booking.`,
+        type: 'booking', reference_type: 'booking', reference_id: updatedBooking.id,
+        data: { event: 'new_booking', booking_id: updatedBooking.booking_id },
       });
     }
   } catch (e) {
@@ -110,10 +122,10 @@ const confirmPayment = async (req, res) => {
 
     // Send push notifications to user & doctor
     const updatedBooking = await bookingModel.findByBookingId(booking_id);
-    bookingNotification.sendBookingConfirmedNotification(updatedBooking);
+    await bookingNotification.sendBookingConfirmedNotification(updatedBooking);
 
-    // Real-time SSE to provider (lab / diagnostic)
-    notifyProviderNewBooking(updatedBooking);
+    // Real-time SSE + FCM to provider (lab / diagnostic)
+    await notifyProviderNewBooking(updatedBooking);
 
     return res.status(200).json({      message: 'Payment successful. Booking confirmed!',
       data: {
@@ -330,6 +342,13 @@ const paytmCallback = async (req, res) => {
       const custId = parseInt(vb.custId || paytmParams.custId);
       if (custId && amount) {
         await walletModel.credit(custId, amount, `Wallet recharge - ${orderId}`, 'recharge', null, 'user');
+        // Notify user (wallet credited)
+        await notify('user', custId, {
+          title: 'Wallet Recharged 💰',
+          body: `₹${amount.toFixed(2)} added to your wallet successfully.`,
+          type: 'payment', reference_type: 'wallet', reference_id: null,
+          data: { event: 'wallet_credited', amount: amount.toFixed(2), recharge_id: orderId },
+        });
       }
       return res.status(200).json({ message: 'Wallet credited.', data: { recharge_id: orderId, amount, status: 'paid' } });
     }
@@ -345,11 +364,18 @@ const paytmCallback = async (req, res) => {
         return res.status(200).json({ message: 'Payment failed.', data: { order_id: orderId, payment_status: 'unpaid' } });
       }
       await pool.query("UPDATE pharmacy_orders SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE order_id = ?", [txnId, orderId]);
-      // Real-time SSE to pharmacy
-      const [ord] = await pool.query('SELECT id, pharmacy_id, total_items, final_amount FROM pharmacy_orders WHERE order_id = ?', [orderId]);
+      // Real-time SSE to pharmacy (payment confirmed)
+      const [ord] = await pool.query('SELECT id, user_id, pharmacy_id, total_items, final_amount FROM pharmacy_orders WHERE order_id = ?', [orderId]);
       if (ord.length) {
         sendToClient(`pharmacy_${ord[0].pharmacy_id}`, 'new_order', {
           order_id: orderId, total_items: ord[0].total_items, amount: ord[0].final_amount, payment_method: 'online',
+        });
+        // Notify user (order confirmed)
+        await notify('user', ord[0].user_id, {
+          title: 'Order Confirmed 🎉',
+          body: 'Your medicine order is confirmed and being processed.',
+          type: 'order', reference_type: 'order', reference_id: ord[0].id,
+          data: { event: 'order_confirmed', order_id: orderId },
         });
       }
       return res.status(200).json({ message: 'Order payment successful.', data: { order_id: orderId, payment_status: 'paid', transaction_id: txnId } });
@@ -366,12 +392,63 @@ const paytmCallback = async (req, res) => {
         return res.status(200).json({ message: 'Payment failed.', data: { booking_id: orderId, payment_status: 'unpaid' } });
       }
       await pool.query("UPDATE ambulance_bookings SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE booking_id = ?", [txnId, orderId]);
-      // Real-time SSE to ambulance provider
-      const [amb] = await pool.query('SELECT partner_id, patient_name FROM ambulance_bookings WHERE booking_id = ?', [orderId]);
-      if (amb.length && amb[0].partner_id) {
-        sendToClient(`ambulance_${amb[0].partner_id}`, 'booking_paid', { booking_id: orderId, patient_name: amb[0].patient_name });
+      const [amb] = await pool.query('SELECT id, user_id, partner_id, patient_name, pickup_address, drop_address, total_fare FROM ambulance_bookings WHERE booking_id = ?', [orderId]);
+      if (amb.length) {
+        // Real-time SSE + FCM to ambulance provider (payment confirmed)
+        if (amb[0].partner_id) {
+          sendToClient(`ambulance_${amb[0].partner_id}`, 'new_booking', {
+            booking_id: orderId, pickup_address: amb[0].pickup_address, drop_address: amb[0].drop_address,
+            fare: amb[0].total_fare, patient_name: amb[0].patient_name,
+          });
+          await notify('ambulance_service', amb[0].partner_id, {
+            title: 'New Ambulance Booking 🚑',
+            body: `Pickup: ${amb[0].pickup_address}. Fare: ₹${parseFloat(amb[0].total_fare).toFixed(0)}`,
+            type: 'booking', reference_type: 'ambulance_booking', reference_id: amb[0].id, reference_code: orderId,
+            data: { event: 'new_ambulance_booking', booking_id: orderId },
+          });
+        }
+        // Notify user (ambulance booking confirmed)
+        await notify('user', amb[0].user_id, {
+          title: 'Ambulance Booking Confirmed 🚑',
+          body: 'Your ambulance booking is confirmed.',
+          type: 'ambulance', reference_type: 'ambulance', reference_id: amb[0].id,
+          data: { event: 'ambulance_confirmed', booking_id: orderId },
+        });
       }
       return res.status(200).json({ message: 'Ambulance payment successful.', data: { booking_id: orderId, payment_status: 'paid' } });
+    }
+
+    // ── BLOOD REQUEST ──
+    if (prefix === 'BR') {
+      const [rows] = await pool.query('SELECT id, user_id, blood_bank_id, blood_group, units_required, payment_status FROM blood_requests WHERE request_id = ?', [orderId]);
+      if (!rows.length) return res.status(404).json({ message: 'Blood request not found.' });
+      if (rows[0].payment_status === 'paid') {
+        return res.status(200).json({ message: 'Already paid.', data: { request_id: orderId, status: 'paid' } });
+      }
+      if (!success) {
+        return res.status(200).json({ message: 'Payment failed.', data: { request_id: orderId, payment_status: 'unpaid' } });
+      }
+      // Mark paid + confirm the request (so the blood bank can process/ready it)
+      await pool.query("UPDATE blood_requests SET payment_status = 'paid', status = 'confirmed', transaction_id = ?, paid_at = NOW() WHERE id = ?", [txnId, rows[0].id]);
+
+      const br = rows[0];
+      // Real-time SSE + notify to blood bank
+      sendToClient(`bloodbank_${br.blood_bank_id}`, 'new_request', {
+        request_id: orderId, blood_group: br.blood_group, units_required: br.units_required, payment_method: 'online',
+      });
+      await notify('blood_bank', br.blood_bank_id, {
+        title: 'New Blood Request 🩸', body: `New ${br.blood_group} request (${br.units_required} unit(s)).`,
+        type: 'booking', reference_type: 'blood_request', reference_id: br.id,
+        data: { event: 'new_blood_request', request_id: orderId },
+      });
+      // Notify user (payment confirmed)
+      await notify('user', br.user_id, {
+        title: 'Blood Request Confirmed 🩸', body: 'Payment successful. Your blood request is confirmed.',
+        type: 'payment', reference_type: 'blood_request', reference_id: br.id,
+        data: { event: 'blood_request_confirmed', request_id: orderId },
+      });
+
+      return res.status(200).json({ message: 'Blood request payment successful.', data: { request_id: orderId, payment_status: 'paid', status: 'confirmed' } });
     }
 
     // ── BOOKING (doctor / lab / diagnostic — BK- or anything else) ──
@@ -388,9 +465,9 @@ const paytmCallback = async (req, res) => {
       await bookingModel.addStatusHistory(booking.id, 'pending', 'confirmed', 'system', null, `Paytm payment success. Mode: ${paymentMode}`);
 
       const updatedBooking = await bookingModel.findByBookingId(orderId);
-      bookingNotification.sendBookingConfirmedNotification(updatedBooking);
-      // Real-time SSE to provider (lab / diagnostic) — same as manual /pay
-      notifyProviderNewBooking(updatedBooking);
+      await bookingNotification.sendBookingConfirmedNotification(updatedBooking);
+      // Real-time SSE + FCM to provider (lab / diagnostic) — same as manual /pay
+      await notifyProviderNewBooking(updatedBooking);
 
       return res.status(200).json({ message: 'Payment successful. Booking confirmed.', data: { booking_id: orderId, status: 'confirmed', payment_status: 'paid', transaction_id: txnId } });
     }
@@ -1011,21 +1088,9 @@ const createDiagnosticBooking = async (req, res) => {
       paytmData = { txn_token: null, order_id: booking.booking_id, mid: paytmConfig.mid, amount: finalAmount.toFixed(2), callback_url: paytmConfig.callbackUrl, website: paytmConfig.website, base_url: paytmConfig.baseUrl, error: paytmError.message };
     }
 
-    // Notify diagnostic center (online booking too)
-    try {
-      console.log(`[SSE DEBUG] Sending to diagnostic_${service.center_id}`);
-      const notificationService = require('../../services/notification.service');
-      const [centerRows] = await pool.query('SELECT fcm_token FROM diagnostic_centers WHERE id = ?', [service.center_id]);
-      if (centerRows[0]?.fcm_token) {
-        await notificationService.sendToDevice(centerRows[0].fcm_token, 'New Booking 📋', `New ${service.service_name} booking for ${booking_date}.`, { type: 'new_booking', booking_id: booking.booking_id });
-      }
-      const { sendToClient: sendSSE } = require('../../events/sse');
-      const sent = sendSSE(`diagnostic_${service.center_id}`, 'new_booking', {
-        booking_id: booking.booking_id, date: booking_date, service_name: service.service_name,
-        amount: finalAmount, patient_name, slot_time: slotTime, booking_type: service.booking_type, payment_method: 'online',
-      });
-      console.log(`[SSE DEBUG] SSE sent result: ${sent}, center_id: ${service.center_id}`);
-    } catch (notifErr) { console.error('Diagnostic notification error:', notifErr.message); }
+    // NOTE: For ONLINE bookings, the diagnostic center is notified only AFTER
+    // payment succeeds — handled by notifyProviderNewBooking() in the Paytm callback.
+    // No provider notification/SSE here (payment not done yet).
 
     return res.status(201).json({
       message: 'Booking created. Complete payment.',
