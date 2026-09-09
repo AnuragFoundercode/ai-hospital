@@ -16,6 +16,7 @@ const AUTH_PROP = {
   blood_bank: 'bloodbank',
   ambulance_service: 'ambulance',
   delivery_partner: 'delivery',
+  blood_delivery_partner: 'bloodDelivery',
   sample_collector: 'collector',
 };
 

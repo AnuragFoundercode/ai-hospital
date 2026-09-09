@@ -420,7 +420,7 @@ const paytmCallback = async (req, res) => {
 
     // ── BLOOD REQUEST ──
     if (prefix === 'BR') {
-      const [rows] = await pool.query('SELECT id, user_id, blood_bank_id, blood_group, units_required, payment_status FROM blood_requests WHERE request_id = ?', [orderId]);
+      const [rows] = await pool.query('SELECT * FROM blood_requests WHERE request_id = ?', [orderId]);
       if (!rows.length) return res.status(404).json({ message: 'Blood request not found.' });
       if (rows[0].payment_status === 'paid') {
         return res.status(200).json({ message: 'Already paid.', data: { request_id: orderId, status: 'paid' } });
@@ -428,27 +428,45 @@ const paytmCallback = async (req, res) => {
       if (!success) {
         return res.status(200).json({ message: 'Payment failed.', data: { request_id: orderId, payment_status: 'unpaid' } });
       }
-      // Mark paid + confirm the request (so the blood bank can process/ready it)
-      await pool.query("UPDATE blood_requests SET payment_status = 'paid', status = 'confirmed', transaction_id = ?, paid_at = NOW() WHERE id = ?", [txnId, rows[0].id]);
+      // Mark PAID only — keep status 'pending' so the blood bank still accepts/rejects it.
+      await pool.query("UPDATE blood_requests SET payment_status = 'paid', transaction_id = ?, paid_at = NOW() WHERE id = ?", [txnId, rows[0].id]);
 
       const br = rows[0];
-      // Real-time SSE + notify to blood bank
+      const bloodAmt = parseFloat((parseFloat(br.total_amount) - parseFloat(br.delivery_fee || 0)).toFixed(2));
+      // Real-time SSE to blood bank (new PAID request awaiting their accept/reject)
       sendToClient(`bloodbank_${br.blood_bank_id}`, 'new_request', {
-        request_id: orderId, blood_group: br.blood_group, units_required: br.units_required, payment_method: 'online',
+        request_id: orderId,
+        patient_name: br.patient_name,
+        patient_age: br.patient_age,
+        patient_gender: br.patient_gender,
+        hospital_name: br.hospital_name,
+        blood_group: br.blood_group,
+        units_required: br.units_required,
+        required_date: br.required_date,
+        attendant_name: br.attendant_name,
+        attendant_mobile: br.attendant_mobile,
+        drop_address: br.drop_address,
+        blood_amount: bloodAmt,
+        delivery_fee: br.delivery_fee,
+        total_amount: br.total_amount,
+        payment_method: 'online',
+        payment_status: 'paid',
+        status: 'pending',
+        created_at: br.created_at,
       });
       await notify('blood_bank', br.blood_bank_id, {
-        title: 'New Blood Request 🩸', body: `New ${br.blood_group} request (${br.units_required} unit(s)).`,
+        title: 'New Blood Request 🩸', body: `New ${br.blood_group} request (${br.units_required} unit(s)). Please accept or reject.`,
         type: 'booking', reference_type: 'blood_request', reference_id: br.id,
         data: { event: 'new_blood_request', request_id: orderId },
       });
-      // Notify user (payment confirmed)
+      // Notify user (payment done, awaiting blood bank confirmation)
       await notify('user', br.user_id, {
-        title: 'Blood Request Confirmed 🩸', body: 'Payment successful. Your blood request is confirmed.',
+        title: 'Payment Successful 🩸', body: 'Payment received. Waiting for the blood bank to confirm your request.',
         type: 'payment', reference_type: 'blood_request', reference_id: br.id,
-        data: { event: 'blood_request_confirmed', request_id: orderId },
+        data: { event: 'blood_request_paid', request_id: orderId },
       });
 
-      return res.status(200).json({ message: 'Blood request payment successful.', data: { request_id: orderId, payment_status: 'paid', status: 'confirmed' } });
+      return res.status(200).json({ message: 'Blood request payment successful. Awaiting blood bank confirmation.', data: { request_id: orderId, payment_status: 'paid', status: 'pending' } });
     }
 
     // ── BOOKING (doctor / lab / diagnostic — BK- or anything else) ──

@@ -5,6 +5,7 @@ const inventoryController = require('../../controllers/bloodbank/inventory.contr
 const requestController = require('../../controllers/bloodbank/request.controller');
 const dashboardController = require('../../controllers/bloodbank/dashboard.controller');
 const walletController = require('../../controllers/bloodbank/wallet.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const bloodbankAuth = require('../../middlewares/bloodbank/bloodbank.auth');
 
@@ -66,5 +67,10 @@ router.get('/events/stream', bloodbankAuth, async (req, res) => {
   );
   res.write(`event: initial\ndata: ${JSON.stringify({ pending_requests: pending[0].count })}\n\n`);
 });
+
+// Notifications
+router.get('/notifications', bloodbankAuth, notificationController.list('blood_bank'));
+router.put('/notifications/read-all', bloodbankAuth, notificationController.markAllRead('blood_bank'));
+router.put('/notifications/:id/read', bloodbankAuth, notificationController.markRead('blood_bank'));
 
 module.exports = router;

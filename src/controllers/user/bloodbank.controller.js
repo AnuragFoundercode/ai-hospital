@@ -235,10 +235,17 @@ const getBloodAvailability = async (req, res) => {
  */
 const getBloodDeliveryQuote = async (req, res) => {
   try {
-    const { blood_bank_id, drop_latitude, drop_longitude, blood_group, units_required = 1 } = req.query;
-    if (!blood_bank_id || !drop_latitude || !drop_longitude) {
-      return res.status(400).json({ message: 'Required: blood_bank_id, drop_latitude, drop_longitude' });
+    const userId = req.user.id;
+    const { blood_bank_id, address_id, blood_group, units_required = 1 } = req.query;
+    if (!blood_bank_id || !address_id) {
+      return res.status(400).json({ message: 'Required: blood_bank_id, address_id' });
     }
+
+    // Resolve drop location from saved address
+    const [addrRows] = await pool.query('SELECT latitude, longitude FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+    if (!addrRows.length) return res.status(404).json({ message: 'Address not found.' });
+    const drop_latitude = addrRows[0].latitude;
+    const drop_longitude = addrRows[0].longitude;
 
     const [bankRows] = await pool.query('SELECT id, latitude, longitude FROM blood_banks WHERE uuid = ? AND is_active = 1 AND is_verified = 1', [blood_bank_id]);
     if (!bankRows.length) return res.status(404).json({ message: 'Blood bank not found.' });
@@ -290,18 +297,26 @@ const requestBlood = async (req, res) => {
       blood_group, units_required, required_date, reason,
       attendant_name, attendant_mobile,
       doctor_prescription_url, blood_requirement_letter_url, patient_id_proof_url,
-      drop_address, drop_latitude, drop_longitude,
+      address_id,
       payment_method
     } = req.body;
 
-    // Validate required (drop location needed to compute delivery fee & assign a rider)
-    if (!blood_bank_id || !patient_name || !patient_age || !patient_gender || !hospital_name || !blood_group || !units_required || !required_date || !attendant_name || !attendant_mobile || !payment_method || !drop_address || !drop_latitude || !drop_longitude) {
-      return res.status(400).json({ message: 'Required: blood_bank_id, patient_name, patient_age, patient_gender, hospital_name, blood_group, units_required, required_date, attendant_name, attendant_mobile, drop_address, drop_latitude, drop_longitude, payment_method' });
+    // Validate required (address_id → drop location, needed to compute delivery fee & assign a rider)
+    if (!blood_bank_id || !patient_name || !patient_age || !patient_gender || !hospital_name || !blood_group || !units_required || !required_date || !attendant_name || !attendant_mobile || !payment_method || !address_id) {
+      return res.status(400).json({ message: 'Required: blood_bank_id, patient_name, patient_age, patient_gender, hospital_name, blood_group, units_required, required_date, attendant_name, attendant_mobile, address_id, payment_method' });
     }
 
     if (!['online', 'offline'].includes(payment_method)) {
       return res.status(400).json({ message: 'payment_method must be "online" or "offline".' });
     }
+
+    // Resolve drop location from the user's saved address
+    const [addrRows] = await pool.query('SELECT address_line1, address_line2, city, latitude, longitude FROM user_addresses WHERE id = ? AND user_id = ?', [address_id, userId]);
+    if (!addrRows.length) return res.status(404).json({ message: 'Address not found.' });
+    const addr = addrRows[0];
+    const drop_address = [addr.address_line1, addr.address_line2, addr.city].filter(Boolean).join(', ');
+    const drop_latitude = addr.latitude;
+    const drop_longitude = addr.longitude;
 
     // Get blood bank (with location for delivery distance)
     const [bankRows] = await pool.query('SELECT id, latitude, longitude FROM blood_banks WHERE uuid = ? AND is_active = 1 AND is_verified = 1', [blood_bank_id]);
@@ -345,7 +360,7 @@ const requestBlood = async (req, res) => {
     const [result] = await pool.query(
       `INSERT INTO blood_requests (request_id, user_id, blood_bank_id, patient_name, patient_age, patient_gender, hospital_name, drop_address, drop_latitude, drop_longitude, blood_group, units_required, required_date, reason, attendant_name, attendant_mobile, doctor_prescription_url, blood_requirement_letter_url, patient_id_proof_url, price_per_unit, total_amount, delivery_distance_km, delivery_fee, payment_method, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [requestId, userId, bankId, patient_name, patient_age, patient_gender, hospital_name, drop_address, drop_latitude, drop_longitude, blood_group, units_required, required_date, reason || null, attendant_name, attendant_mobile, doctor_prescription_url || null, blood_requirement_letter_url || null, patient_id_proof_url || null, pricePerUnit, totalAmount, deliveryDistanceKm, deliveryFee, payment_method, payment_method === 'offline' ? 'confirmed' : 'pending']
+      [requestId, userId, bankId, patient_name, patient_age, patient_gender, hospital_name, drop_address, drop_latitude, drop_longitude, blood_group, units_required, required_date, reason || null, attendant_name, attendant_mobile, doctor_prescription_url || null, blood_requirement_letter_url || null, patient_id_proof_url || null, pricePerUnit, totalAmount, deliveryDistanceKm, deliveryFee, payment_method, 'pending']
     );
 
     const amountBreakdown = {
@@ -362,19 +377,29 @@ const requestBlood = async (req, res) => {
       sendToClient(`bloodbank_${bankId}`, 'new_request', {
         request_id: requestId,
         patient_name,
+        patient_age,
+        patient_gender,
         hospital_name,
         blood_group,
         units_required,
         required_date,
+        attendant_name,
+        attendant_mobile,
+        drop_address,
+        blood_amount: bloodAmount,
+        delivery_fee: deliveryFee,
         total_amount: totalAmount,
         payment_method,
+        payment_status: 'unpaid',
+        status: 'pending',
+        created_at: new Date().toISOString(),
       });
     }
 
-    // OFFLINE → direct confirm
+    // OFFLINE → submitted, awaiting blood bank accept/reject
     if (payment_method === 'offline') {
       return res.status(201).json({
-        message: 'Blood request submitted! Pay at blood bank.',
+        message: 'Blood request submitted! Waiting for blood bank to accept.',
         data: {
           request_id: requestId,
           blood_group,
@@ -382,7 +407,7 @@ const requestBlood = async (req, res) => {
           amount: amountBreakdown,
           total_amount: totalAmount,
           payment_method: 'offline',
-          status: 'confirmed',
+          status: 'pending',
           payment_status: 'unpaid',
           payment: null,
         },
@@ -501,6 +526,43 @@ const getBloodRequestDetail = async (req, res) => {
 
     const r = rows[0];
 
+    // Delivery leg (partner + live status + handover OTP + fee). Updates whenever the
+    // blood delivery partner changes status (accept/pickup/reached/delivered).
+    const [delRows] = await pool.query(
+      `SELECT bdr.*, p.full_name AS partner_name, p.mobile AS partner_mobile, p.profile_photo AS partner_photo,
+              p.vehicle_type, p.vehicle_number, p.average_rating AS partner_rating,
+              p.latitude AS partner_latitude, p.longitude AS partner_longitude
+       FROM blood_delivery_requests bdr
+       LEFT JOIN blood_delivery_partners p ON bdr.partner_id = p.id
+       WHERE bdr.blood_request_id = ?
+       ORDER BY bdr.id DESC LIMIT 1`,
+      [r.id]
+    );
+    const d = delRows[0] || null;
+    const delivery = d ? {
+      request_id: d.request_id,
+      status: d.status,
+      distance_km: d.distance_km,
+      delivery_fee: d.delivery_fee,
+      delivery_otp: d.status === 'reached' ? d.delivery_otp : null, // OTP only while partner is at the door
+      partner: d.partner_id ? {
+        name: d.partner_name,
+        mobile: d.partner_mobile,
+        profile_photo: d.partner_photo,
+        vehicle_type: d.vehicle_type,
+        vehicle_number: d.vehicle_number,
+        rating: d.partner_rating,
+        latitude: d.partner_latitude,
+        longitude: d.partner_longitude,
+      } : null,
+      timeline: {
+        assigned_at: d.assigned_at,
+        picked_up_at: d.picked_up_at,
+        reached_at: d.reached_at,
+        delivered_at: d.delivered_at,
+      },
+    } : null;
+
     return res.status(200).json({
       message: 'Request detail fetched.',
       data: {
@@ -530,12 +592,17 @@ const getBloodRequestDetail = async (req, res) => {
         },
         payment: {
           price_per_unit: r.price_per_unit,
+          blood_amount: parseFloat((parseFloat(r.total_amount) - parseFloat(r.delivery_fee || 0)).toFixed(2)),
+          delivery_fee: r.delivery_fee,
+          delivery_distance_km: r.delivery_distance_km,
           total_amount: r.total_amount,
           payment_method: r.payment_method,
           payment_status: r.payment_status,
           transaction_id: r.transaction_id,
           paid_at: r.paid_at,
         },
+        delivery,
+        drop_address: r.drop_address,
         blood_bank: {
           id: r.bank_uuid,
           name: r.bank_name,

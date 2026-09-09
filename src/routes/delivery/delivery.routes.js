@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const deliveryController = require('../../controllers/delivery/delivery.controller');
 const walletController = require('../../controllers/delivery/wallet.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const deliveryAuth = require('../../middlewares/delivery/delivery.auth');
 
@@ -44,5 +45,10 @@ router.get('/wallet/withdrawals', deliveryAuth, walletController.getWithdrawals)
 router.get('/events/stream', deliveryAuth, (req, res) => {
   registerClient(req, res, `delivery_${req.delivery.id}`);
 });
+
+// Notifications
+router.get('/notifications', deliveryAuth, notificationController.list('delivery_partner'));
+router.put('/notifications/read-all', deliveryAuth, notificationController.markAllRead('delivery_partner'));
+router.put('/notifications/:id/read', deliveryAuth, notificationController.markRead('delivery_partner'));
 
 module.exports = router;

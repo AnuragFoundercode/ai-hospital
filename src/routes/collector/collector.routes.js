@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const collectorController = require('../../controllers/collector/collector.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const collectorAuth = require('../../middlewares/collector/collector.auth');
 
@@ -42,5 +43,10 @@ router.get('/wallet/withdrawals', collectorAuth, collectorController.getWithdraw
 router.get('/events/stream', collectorAuth, (req, res) => {
   registerClient(req, res, `collector_${req.collector.id}`);
 });
+
+// Notifications
+router.get('/notifications', collectorAuth, notificationController.list('sample_collector'));
+router.put('/notifications/read-all', collectorAuth, notificationController.markAllRead('sample_collector'));
+router.put('/notifications/:id/read', collectorAuth, notificationController.markRead('sample_collector'));
 
 module.exports = router;

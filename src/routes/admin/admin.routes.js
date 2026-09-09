@@ -3,6 +3,10 @@ const router = express.Router();
 const adminController = require('../../controllers/admin/admin.controller');
 const zoneController = require('../../controllers/admin/zone.controller');
 const stateController = require('../../controllers/admin/state.controller');
+const configController = require('../../controllers/admin/config.controller');
+const supportController = require('../../controllers/admin/support.controller');
+const policyController = require('../../controllers/admin/policy.controller');
+const userController = require('../../controllers/admin/user.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -27,5 +31,33 @@ router.put('/zones/:id/toggle-status', adminAuth, zoneController.toggleZoneStatu
 router.get('/states', adminAuth, stateController.getStates);
 router.post('/states', adminAuth, stateController.createState);
 router.put('/states/:id', adminAuth, stateController.updateState);
+
+// App Config Management — admin can VIEW and UPDATE values only.
+// Keys are created/removed by developers (via migrations) to avoid breaking
+// code that depends on specific config keys.
+router.get('/config', adminAuth, configController.getConfigs);
+router.put('/config', adminAuth, configController.bulkUpdateConfig);
+router.get('/config/:key', adminAuth, configController.getConfig);
+router.put('/config/:key', adminAuth, configController.updateConfig);
+
+// User Management
+router.get('/users', adminAuth, userController.getUsers);
+router.put('/users/:id/toggle-status', adminAuth, userController.toggleUserStatus);
+router.put('/users/:id/credit-limit', adminAuth, userController.updateCreditLimit);
+
+// Help & Support — contact + FAQs
+router.get('/support/contact', adminAuth, supportController.getContact);
+router.put('/support/contact', adminAuth, supportController.updateContact);
+router.get('/faqs', adminAuth, supportController.getFaqs);
+router.post('/faqs', adminAuth, supportController.createFaq);
+router.put('/faqs/:id', adminAuth, supportController.updateFaq);
+router.delete('/faqs/:id', adminAuth, supportController.deleteFaq);
+
+// Policy Management (privacy / terms / refund / custom)
+router.get('/policies', adminAuth, policyController.getPolicies);
+router.post('/policies', adminAuth, policyController.createPolicy);
+router.get('/policies/:id', adminAuth, policyController.getPolicy);
+router.put('/policies/:id', adminAuth, policyController.updatePolicy);
+router.delete('/policies/:id', adminAuth, policyController.deletePolicy);
 
 module.exports = router;

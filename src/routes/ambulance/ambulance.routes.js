@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const ambulanceController = require('../../controllers/ambulance/ambulance.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const ambulanceAuth = require('../../middlewares/ambulance/ambulance.auth');
 
@@ -43,5 +44,10 @@ router.get('/wallet/withdrawals', ambulanceAuth, ambulanceController.getWithdraw
 router.get('/events/stream', ambulanceAuth, (req, res) => {
   registerClient(req, res, `ambulance_${req.ambulance.id}`);
 });
+
+// Notifications
+router.get('/notifications', ambulanceAuth, notificationController.list('ambulance_service'));
+router.put('/notifications/read-all', ambulanceAuth, notificationController.markAllRead('ambulance_service'));
+router.put('/notifications/:id/read', ambulanceAuth, notificationController.markRead('ambulance_service'));
 
 module.exports = router;

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bloodDeliveryController = require('../../controllers/blood-delivery/blood-delivery.controller');
 const walletController = require('../../controllers/blood-delivery/wallet.controller');
+const notificationController = require('../../controllers/notification.controller');
 const { registerClient } = require('../../events/sse');
 const bloodDeliveryAuth = require('../../middlewares/blood-delivery/blood-delivery.auth');
 
@@ -44,5 +45,10 @@ router.get('/wallet/withdrawals', bloodDeliveryAuth, walletController.getWithdra
 router.get('/events/stream', bloodDeliveryAuth, (req, res) => {
   registerClient(req, res, `blood_delivery_${req.bloodDelivery.id}`);
 });
+
+// Notifications
+router.get('/notifications', bloodDeliveryAuth, notificationController.list('blood_delivery_partner'));
+router.put('/notifications/read-all', bloodDeliveryAuth, notificationController.markAllRead('blood_delivery_partner'));
+router.put('/notifications/:id/read', bloodDeliveryAuth, notificationController.markRead('blood_delivery_partner'));
 
 module.exports = router;
