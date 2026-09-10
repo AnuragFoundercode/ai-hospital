@@ -1,4 +1,6 @@
 const { pool } = require('../../config/database');
+const { clearRejectedStep } = require('../../utils/rejectedSteps');
+const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
 
 const clean = (obj) => {
   const out = {};
@@ -29,6 +31,7 @@ const step1Personal = async (req, res) => {
       'UPDATE ambulance_services SET full_name = ?, owner_name = ?, name = ?, email = ?, dob = ?, gender = ?, zone_id = ?, city = ?, state = ?, registration_step = GREATEST(registration_step, 1) WHERE id = ?',
       [full_name, full_name, full_name, email || null, dob || null, gender || null, zone_id, city || null, state || null, req.ambulance.id]
     );
+    await clearRejectedStep('ambulance_services', req.ambulance.id, 1);
     return res.status(200).json({ message: 'Step 1 saved.', data: { registration_step: 1 } });
   } catch (error) { console.error('ambulance step1 error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -42,6 +45,7 @@ const step2License = async (req, res) => {
       'UPDATE ambulance_services SET driving_license_number = ?, license_expiry_date = ?, registration_step = GREATEST(registration_step, 2) WHERE id = ?',
       [driving_license_number, license_expiry_date || null, req.ambulance.id]
     );
+    await clearRejectedStep('ambulance_services', req.ambulance.id, 2);
     return res.status(200).json({ message: 'Step 2 saved.', data: { registration_step: 2 } });
   } catch (error) { console.error('ambulance step2 error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -75,6 +79,7 @@ const step3Vehicle = async (req, res) => {
       'UPDATE ambulance_services SET base_fare = ?, per_km_charge = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?',
       [type[0].base_fare, type[0].per_km_charge, ambId]
     );
+    await clearRejectedStep('ambulance_services', ambId, 3);
     return res.status(200).json({ message: 'Step 3 saved.', data: { registration_step: 3 } });
   } catch (error) { console.error('ambulance step3 error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -89,6 +94,7 @@ const step4Bank = async (req, res) => {
     if (existing.length) await pool.query('UPDATE ambulance_bank_details SET account_holder_name = ?, bank_name = ?, account_number = ?, ifsc_code = ? WHERE ambulance_service_id = ?', [account_holder_name, bank_name, account_number, ifsc_code, ambId]);
     else await pool.query('INSERT INTO ambulance_bank_details (ambulance_service_id, account_holder_name, bank_name, account_number, ifsc_code) VALUES (?, ?, ?, ?, ?)', [ambId, account_holder_name, bank_name, account_number, ifsc_code]);
     await pool.query('UPDATE ambulance_services SET registration_step = GREATEST(registration_step, 4) WHERE id = ?', [ambId]);
+    await clearRejectedStep('ambulance_services', ambId, 4);
     return res.status(200).json({ message: 'Step 4 saved.', data: { registration_step: 4 } });
   } catch (error) { console.error('ambulance step4 error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -96,13 +102,22 @@ const step4Bank = async (req, res) => {
 // Step 5: Documents — aadhaar, dl, rc book, emergency training cert, pan card (final → pending)
 const step5Documents = async (req, res) => {
   try {
-    const { profile_photo, aadhaar_url, driving_licence_url, rc_book_url, emergency_training_certificate_url, pan_card_url } = req.body;
+    const { profile_photo, aadhaar_url, driving_licence_url, rc_book_url, emergency_training_certificate_url, pan_card_url, qualifications } = req.body;
     if (!profile_photo) return res.status(400).json({ message: 'profile_photo required.' });
     if (!aadhaar_url || !driving_licence_url || !rc_book_url) return res.status(400).json({ message: 'aadhaar_url, driving_licence_url and rc_book_url required.' });
-    await pool.query(
-      "UPDATE ambulance_services SET profile_photo = ?, aadhaar_url = ?, driving_licence_url = ?, rc_book_url = ?, emergency_training_certificate_url = ?, pan_card_url = ?, registration_step = 5, verification_status = 'pending' WHERE id = ?",
-      [profile_photo, aadhaar_url, driving_licence_url, rc_book_url, emergency_training_certificate_url || null, pan_card_url || null, req.ambulance.id]
-    );
+    const quals = normalizeQualifications(qualifications);
+    if (quals === undefined) {
+      await pool.query(
+        "UPDATE ambulance_services SET profile_photo = ?, aadhaar_url = ?, driving_licence_url = ?, rc_book_url = ?, emergency_training_certificate_url = ?, pan_card_url = ?, registration_step = 5, verification_status = 'pending' WHERE id = ?",
+        [profile_photo, aadhaar_url, driving_licence_url, rc_book_url, emergency_training_certificate_url || null, pan_card_url || null, req.ambulance.id]
+      );
+    } else {
+      await pool.query(
+        "UPDATE ambulance_services SET profile_photo = ?, aadhaar_url = ?, driving_licence_url = ?, rc_book_url = ?, emergency_training_certificate_url = ?, pan_card_url = ?, qualifications = ?, registration_step = 5, verification_status = 'pending' WHERE id = ?",
+        [profile_photo, aadhaar_url, driving_licence_url, rc_book_url, emergency_training_certificate_url || null, pan_card_url || null, quals, req.ambulance.id]
+      );
+    }
+    await clearRejectedStep('ambulance_services', req.ambulance.id, 5);
     return res.status(200).json({ message: 'Documents saved. Profile submitted for approval.', data: { registration_step: 5, verification_status: 'pending' } });
   } catch (error) { console.error('ambulance step5 error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -131,11 +146,13 @@ const getProfile = async (req, res) => {
         registration_step: p.registration_step,
         verification_status: p.verification_status,
         rejection_reason: p.rejection_reason,
+        rejected_steps: p.rejected_steps ? p.rejected_steps.split(',').map(Number) : [],
         personal: clean({ name: p.name, owner_name: p.owner_name, full_name: p.full_name, email: p.email, dob: p.dob, gender: p.gender, profile_photo: p.profile_photo, zone_id: p.zone_id, zone_name: p.zone_name, city: p.city, state: p.state }),
         license: clean({ driving_license_number: p.driving_license_number, license_expiry_date: p.license_expiry_date }),
         vehicle: clean({ ambulance_type_id: p.ambulance_type_id, vehicle_type_name: p.vehicle_type_name, vehicle_type_icon: p.vehicle_type_icon, vehicle_number: p.vehicle_number, vehicle_model: p.vehicle_model, vehicle_registration_date: p.vehicle_registration_date, insurance_valid_till: p.insurance_valid_till, base_fare: p.base_fare, per_km_charge: p.per_km_charge }),
         bank: bankRows[0] || null,
         documents: clean({ aadhaar_url: p.aadhaar_url, driving_licence_url: p.driving_licence_url, rc_book_url: p.rc_book_url, emergency_training_certificate_url: p.emergency_training_certificate_url, pan_card_url: p.pan_card_url }),
+        qualifications: parseQualifications(p.qualifications),
         status: { is_online: p.is_online, is_active: p.is_active },
       },
     });

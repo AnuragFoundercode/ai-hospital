@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const doctorModel = require('../../models/doctor/doctor.model');
+const { clearRejectedStep } = require('../../utils/rejectedSteps');
+const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
 
 // ─────────────────────────────────────────────
 // DOCTOR CONTROLLER - vendor-style 4-step registration
@@ -117,6 +119,7 @@ const step1Personal = async (req, res) => {
     }
 
     await doctorModel.updatePersonalDetails(doctorId, { full_name: full_name.trim(), email, date_of_birth, gender });
+    await clearRejectedStep('doctors', doctorId, 1);
 
     return res.status(200).json({ message: 'Personal details saved.', data: { registration_step: 1 } });
   } catch (error) {
@@ -151,6 +154,7 @@ const step2Professional = async (req, res) => {
       registration_number,
       per_minute_fee,
     });
+    await clearRejectedStep('doctors', doctorId, 2);
 
     return res.status(200).json({ message: 'Professional details saved.', data: { registration_step: 2 } });
   } catch (error) {
@@ -166,7 +170,7 @@ const step2Professional = async (req, res) => {
 const step3Documents = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
-    const { medical_registration_url, degree_certificate_url, aadhaar_card_url, pan_card_url, profile_photo } = req.body;
+    const { medical_registration_url, degree_certificate_url, aadhaar_card_url, pan_card_url, profile_photo, qualifications } = req.body;
 
     if (!medical_registration_url || !degree_certificate_url) {
       return res.status(400).json({ message: 'Medical registration and degree certificate URLs are required.' });
@@ -178,7 +182,9 @@ const step3Documents = async (req, res) => {
       aadhaar_card_url,
       pan_card_url,
       profile_photo,
+      qualifications: normalizeQualifications(qualifications),
     });
+    await clearRejectedStep('doctors', doctorId, 3);
 
     return res.status(200).json({ message: 'Documents uploaded.', data: { registration_step: 3 } });
   } catch (error) {
@@ -202,6 +208,7 @@ const step4Bank = async (req, res) => {
     }
 
     await doctorModel.upsertBankDetails(doctorId, { account_holder_name, bank_name, account_number, ifsc_code });
+    await clearRejectedStep('doctors', doctorId, 4);
 
     return res.status(200).json({
       message: 'Registration complete! Your account is under review. Admin will verify and approve.',
@@ -231,6 +238,8 @@ const getProfile = async (req, res) => {
         id: doctor.uuid,
         registration_step: doctor.registration_step,
         verification_status: doctor.verification_status,
+        rejection_reason: doctor.rejection_reason,
+        rejected_steps: doctor.rejected_steps ? doctor.rejected_steps.split(',').map(Number) : [],
         call_status: doctor.call_status,
         admin_commission_percent: doctor.admin_commission_percent,
         personal: {
@@ -256,6 +265,7 @@ const getProfile = async (req, res) => {
           pan_card_url: doctor.pan_card_url,
           profile_photo: doctor.profile_photo,
         },
+        qualifications: parseQualifications(doctor.qualifications),
         bank: bank ? {
           account_holder_name: bank.account_holder_name,
           bank_name: bank.bank_name,
@@ -302,6 +312,38 @@ const updateCallStatus = async (req, res) => {
   }
 };
 
+/**
+ * PUT /api/v1/doctor/emergency-availability
+ * Body: { is_emergency_available } (optional — if omitted, flips current value)
+ * Toggle whether this doctor is available for emergency calls.
+ */
+const toggleEmergencyAvailability = async (req, res) => {
+  try {
+    const doctorId = req.doctor.id;
+    const doctor = await doctorModel.findById(doctorId);
+    if (!doctor) return res.status(404).json({ message: 'Doctor not found.' });
+    if (doctor.verification_status !== 'approved') {
+      return res.status(400).json({ message: 'Account not verified yet. Cannot enable emergency availability.' });
+    }
+
+    // explicit value if provided, else flip current
+    const body = req.body || {};
+    const next = body.is_emergency_available !== undefined
+      ? (body.is_emergency_available ? 1 : 0)
+      : (doctor.is_emergency_available ? 0 : 1);
+
+    await doctorModel.updateProfile(doctorId, { is_emergency_available: next });
+
+    return res.status(200).json({
+      message: next ? 'You are now available for emergency calls.' : 'Emergency availability turned off.',
+      data: { is_emergency_available: !!next },
+    });
+  } catch (error) {
+    console.error('doctor toggleEmergencyAvailability error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   sendOtp,
   verifyOtp,
@@ -312,4 +354,5 @@ module.exports = {
   step4Bank,
   getProfile,
   updateCallStatus,
+  toggleEmergencyAvailability,
 };

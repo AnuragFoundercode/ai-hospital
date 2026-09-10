@@ -66,11 +66,20 @@ const updateProfessionalDetails = async (id, data) => {
 
 // ─── STEP 3: Documents ───
 const updateDocuments = async (id, data) => {
+  if (data.qualifications === undefined) {
+    const [result] = await pool.query(
+      `UPDATE doctors SET medical_license_url = ?, degree_certificate_url = ?,
+         aadhaar_url = ?, pan_card_url = ?, profile_photo = ?,
+         registration_step = GREATEST(registration_step, 3) WHERE id = ?`,
+      [data.medical_registration_url || null, data.degree_certificate_url || null, data.aadhaar_card_url || null, data.pan_card_url || null, data.profile_photo || null, id]
+    );
+    return result;
+  }
   const [result] = await pool.query(
     `UPDATE doctors SET medical_license_url = ?, degree_certificate_url = ?,
-       aadhaar_url = ?, pan_card_url = ?, profile_photo = ?,
+       aadhaar_url = ?, pan_card_url = ?, profile_photo = ?, qualifications = ?,
        registration_step = GREATEST(registration_step, 3) WHERE id = ?`,
-    [data.medical_registration_url || null, data.degree_certificate_url || null, data.aadhaar_card_url || null, data.pan_card_url || null, data.profile_photo || null, id]
+    [data.medical_registration_url || null, data.degree_certificate_url || null, data.aadhaar_card_url || null, data.pan_card_url || null, data.profile_photo || null, data.qualifications, id]
   );
   return result;
 };
@@ -104,7 +113,7 @@ const getBankDetails = async (doctorId) => {
 
 // ─── Generic profile update ───
 const updateProfile = async (id, data) => {
-  const allowedFields = ['full_name', 'email', 'gender', 'qualification', 'specialization', 'registration_number', 'registration_council', 'experience_years', 'bio', 'spoken_languages', 'per_minute_fee', 'category_id', 'call_status'];
+  const allowedFields = ['full_name', 'email', 'gender', 'qualification', 'specialization', 'registration_number', 'registration_council', 'experience_years', 'bio', 'spoken_languages', 'per_minute_fee', 'category_id', 'call_status', 'is_emergency_available'];
   const fields = [];
   const values = [];
 

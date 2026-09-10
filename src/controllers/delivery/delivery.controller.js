@@ -3,6 +3,8 @@ const { pool } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../../services/notification.service');
 const { notify } = require('../../services/notify');
+const { clearRejectedStep } = require('../../utils/rejectedSteps');
+const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
 
 // ─────────────────────────────────────────────
 // DELIVERY PARTNER CONTROLLER
@@ -81,6 +83,7 @@ const step1Personal = async (req, res) => {
       'UPDATE delivery_partners SET full_name = ?, email = ?, date_of_birth = ?, gender = ?, profile_photo = ?, registration_step = GREATEST(registration_step, 1) WHERE id = ?',
       [full_name, email || null, date_of_birth || null, gender || null, profile_photo || null, req.delivery.id]
     );
+    await clearRejectedStep('delivery_partners', req.delivery.id, 1);
 
     return res.status(200).json({ message: 'Step 1 saved.', data: { registration_step: 1 } });
   } catch (error) {
@@ -113,6 +116,7 @@ const step2Vehicle = async (req, res) => {
       'UPDATE delivery_partners SET vehicle_type = ?, vehicle_type_id = ?, rc_number = ?, dl_number = ?, zone_id = ?, registration_step = GREATEST(registration_step, 2) WHERE id = ?',
       [vehicle_type || null, vehicle_type_id || null, rc_number, dl_number, zone_id || null, req.delivery.id]
     );
+    await clearRejectedStep('delivery_partners', req.delivery.id, 2);
 
     return res.status(200).json({ message: 'Step 2 saved.', data: { registration_step: 2 } });
   } catch (error) {
@@ -127,15 +131,24 @@ const step2Vehicle = async (req, res) => {
  */
 const step3Documents = async (req, res) => {
   try {
-    const { aadhaar_front_url, aadhaar_back_url, pan_card_url, driving_licence_url, rider_selfie_url } = req.body;
+    const { aadhaar_front_url, aadhaar_back_url, pan_card_url, driving_licence_url, rider_selfie_url, qualifications } = req.body;
     if (!aadhaar_front_url || !aadhaar_back_url || !driving_licence_url || !rider_selfie_url) {
       return res.status(400).json({ message: 'Required: aadhaar_front_url, aadhaar_back_url, driving_licence_url, rider_selfie_url' });
     }
+    const quals = normalizeQualifications(qualifications); // undefined = not sent
 
-    await pool.query(
-      "UPDATE delivery_partners SET aadhaar_front_url = ?, aadhaar_back_url = ?, pan_card_url = ?, driving_licence_url = ?, rider_selfie_url = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?",
-      [aadhaar_front_url, aadhaar_back_url, pan_card_url || null, driving_licence_url, rider_selfie_url, req.delivery.id]
-    );
+    if (quals === undefined) {
+      await pool.query(
+        "UPDATE delivery_partners SET aadhaar_front_url = ?, aadhaar_back_url = ?, pan_card_url = ?, driving_licence_url = ?, rider_selfie_url = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?",
+        [aadhaar_front_url, aadhaar_back_url, pan_card_url || null, driving_licence_url, rider_selfie_url, req.delivery.id]
+      );
+    } else {
+      await pool.query(
+        "UPDATE delivery_partners SET aadhaar_front_url = ?, aadhaar_back_url = ?, pan_card_url = ?, driving_licence_url = ?, rider_selfie_url = ?, qualifications = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?",
+        [aadhaar_front_url, aadhaar_back_url, pan_card_url || null, driving_licence_url, rider_selfie_url, quals, req.delivery.id]
+      );
+    }
+    await clearRejectedStep('delivery_partners', req.delivery.id, 3);
 
     return res.status(200).json({ message: 'Documents uploaded.', data: { registration_step: 3 } });
   } catch (error) {
@@ -165,6 +178,7 @@ const step4Bank = async (req, res) => {
     }
 
     await pool.query("UPDATE delivery_partners SET registration_step = 4, verification_status = 'pending' WHERE id = ?", [partnerId]);
+    await clearRejectedStep('delivery_partners', partnerId, 4);
 
     return res.status(200).json({ message: 'Bank details saved. Profile under review.', data: { registration_step: 4, verification_status: 'pending' } });
   } catch (error) {
@@ -189,10 +203,11 @@ const getProfile = async (req, res) => {
     return res.status(200).json({
       message: 'Profile fetched.',
       data: {
-        id: p.uuid, mobile: p.mobile, registration_step: p.registration_step, verification_status: p.verification_status, rejection_reason: p.rejection_reason,
+        id: p.uuid, mobile: p.mobile, registration_step: p.registration_step, verification_status: p.verification_status, rejection_reason: p.rejection_reason, rejected_steps: p.rejected_steps ? p.rejected_steps.split(',').map(Number) : [],
         personal: { full_name: p.full_name, email: p.email, date_of_birth: p.date_of_birth, gender: p.gender, profile_photo: p.profile_photo },
         vehicle: { vehicle_type: p.vehicle_type, vehicle_type_id: p.vehicle_type_id, rc_number: p.rc_number, dl_number: p.dl_number, zone_id: p.zone_id, zone_name: p.zone_name },
         documents: { aadhaar_front_url: p.aadhaar_front_url, aadhaar_back_url: p.aadhaar_back_url, pan_card_url: p.pan_card_url, driving_licence_url: p.driving_licence_url, rider_selfie_url: p.rider_selfie_url },
+        qualifications: parseQualifications(p.qualifications),
         bank: bank,
         status: { is_online: p.is_online, is_active: p.is_active },
         stats: { average_rating: p.average_rating, total_deliveries: p.total_deliveries, total_earned: p.total_earned },

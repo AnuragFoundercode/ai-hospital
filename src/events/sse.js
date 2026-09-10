@@ -1,14 +1,41 @@
 /**
  * Server-Sent Events (SSE) Manager
- * Real-time updates for all panels
- * Keys: user_1, doctor_1, lab_1 (type + id)
+ * Real-time updates for all panels.
+ * Keys: user_1, doctor_1, lab_1, blood_delivery_3 (type + id)
+ *
+ * A single key (e.g. one vendor) may have MULTIPLE live connections
+ * (reconnects, multiple tabs/devices). We keep a Set of responses per key so:
+ *   - data is delivered to every live connection for that key
+ *   - a reconnect never silently overwrites/orphans an older connection
+ *   - each connection cleans up only itself (no cross-connection races)
  */
 
+// clientKey -> Set<res>
 const clients = new Map();
 
+const addConnection = (clientKey, res) => {
+  let set = clients.get(clientKey);
+  if (!set) { set = new Set(); clients.set(clientKey, set); }
+  set.add(res);
+  return set;
+};
+
+const removeConnection = (clientKey, res) => {
+  const set = clients.get(clientKey);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) clients.delete(clientKey);
+};
+
+const totalConnections = () => {
+  let n = 0;
+  clients.forEach((set) => { n += set.size; });
+  return n;
+};
+
 /**
- * Register SSE connection
- * @param {string} clientKey - e.g., "user_1", "lab_4", "doctor_2"
+ * Register an SSE connection.
+ * @param {string} clientKey - e.g., "user_1", "lab_4", "blood_delivery_3"
  */
 const registerClient = (req, res, clientKey) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -18,30 +45,49 @@ const registerClient = (req, res, clientKey) => {
 
   res.write(`data: ${JSON.stringify({ type: 'connected', message: 'SSE connected' })}\n\n`);
 
-  clients.set(clientKey, res);
-  console.log(`📡 SSE connected: ${clientKey} | Total: ${clients.size}`);
+  addConnection(clientKey, res);
+  console.log(`📡 SSE connected: ${clientKey} | Connections: ${totalConnections()}`);
 
   const heartbeat = setInterval(() => {
-    res.write(': heartbeat\n\n');
+    try {
+      res.write(': heartbeat\n\n');
+    } catch (e) {
+      // write on a dead socket -> clean this connection up
+      clearInterval(heartbeat);
+      removeConnection(clientKey, res);
+    }
   }, 30000);
 
-  req.on('close', () => {
+  // Clean up THIS specific connection only.
+  const cleanup = () => {
     clearInterval(heartbeat);
-    clients.delete(clientKey);
-    console.log(`📡 SSE disconnected: ${clientKey} | Total: ${clients.size}`);
-  });
+    removeConnection(clientKey, res);
+    console.log(`📡 SSE disconnected: ${clientKey} | Connections: ${totalConnections()}`);
+  };
+  req.on('close', cleanup);
+  res.on('error', cleanup);
 };
 
 /**
- * Send event to specific client
+ * Send an event to every live connection for a client key.
+ * Returns true if at least one connection received it.
  */
 const sendToClient = (clientKey, eventType, data) => {
-  const client = clients.get(clientKey);
-  if (client) {
-    client.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
-    return true;
+  const set = clients.get(clientKey);
+  if (!set || set.size === 0) return false;
+
+  const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+  let delivered = false;
+  for (const res of [...set]) {
+    try {
+      res.write(payload);
+      delivered = true;
+    } catch (e) {
+      // dead connection -> drop it
+      removeConnection(clientKey, res);
+    }
   }
-  return false;
+  return delivered;
 };
 
 // Shorthand helpers
@@ -50,11 +96,18 @@ const sendToDoctor = (doctorId, eventType, data) => sendToClient(`doctor_${docto
 const sendToLab = (labId, eventType, data) => sendToClient(`lab_${labId}`, eventType, data);
 
 /**
- * Broadcast to all
+ * Broadcast to every connection of every client.
  */
 const broadcast = (eventType, data) => {
-  clients.forEach((client) => {
-    client.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+  const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+  clients.forEach((set, clientKey) => {
+    for (const res of [...set]) {
+      try {
+        res.write(payload);
+      } catch (e) {
+        removeConnection(clientKey, res);
+      }
+    }
   });
 };
 

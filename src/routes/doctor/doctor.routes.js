@@ -26,6 +26,7 @@ router.put('/registration/step4', doctorAuth, doctorController.step4Bank); // ba
 // Profile (token required)
 router.get('/profile', doctorAuth, doctorController.getProfile);
 router.put('/call-status', doctorAuth, doctorController.updateCallStatus);
+router.put('/emergency-availability', doctorAuth, doctorController.toggleEmergencyAvailability);
 
 // Video Calls (per-minute)
 router.put('/call/:call_id/accept', doctorAuth, callController.acceptCall);

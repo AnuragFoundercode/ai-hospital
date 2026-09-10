@@ -7,6 +7,7 @@ const configController = require('../../controllers/admin/config.controller');
 const supportController = require('../../controllers/admin/support.controller');
 const policyController = require('../../controllers/admin/policy.controller');
 const userController = require('../../controllers/admin/user.controller');
+const vendorController = require('../../controllers/admin/vendor.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -42,8 +43,16 @@ router.put('/config/:key', adminAuth, configController.updateConfig);
 
 // User Management
 router.get('/users', adminAuth, userController.getUsers);
+router.get('/users/:id/overview', adminAuth, userController.getUserOverview);
+router.get('/users/:id/bookings', adminAuth, userController.getUserBookings);
 router.put('/users/:id/toggle-status', adminAuth, userController.toggleUserStatus);
 router.put('/users/:id/credit-limit', adminAuth, userController.updateCreditLimit);
+
+// Vendor Management (multi-step vendors: delivery | blood_delivery | collector | ambulance | doctor)
+router.get('/vendors/:type', adminAuth, vendorController.getVendors);
+router.get('/vendors/:type/:id', adminAuth, vendorController.getVendorDetail);
+router.put('/vendors/:type/:id/approve', adminAuth, vendorController.approveVendor);
+router.put('/vendors/:type/:id/reject', adminAuth, vendorController.rejectVendor);
 
 // Help & Support — contact + FAQs
 router.get('/support/contact', adminAuth, supportController.getContact);

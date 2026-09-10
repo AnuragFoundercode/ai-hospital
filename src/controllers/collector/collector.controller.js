@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../../services/notification.service');
+const { clearRejectedStep } = require('../../utils/rejectedSteps');
+const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
 
 const STATIC_OTP = '111111';
 
@@ -39,6 +41,7 @@ const step1Personal = async (req, res) => {
     const { full_name, email, date_of_birth, gender } = req.body;
     if (!full_name) return res.status(400).json({ message: 'full_name required.' });
     await pool.query('UPDATE sample_collectors SET full_name = ?, email = ?, date_of_birth = ?, gender = ?, registration_step = GREATEST(registration_step, 1) WHERE id = ?', [full_name, email || null, date_of_birth || null, gender || null, req.collector.id]);
+    await clearRejectedStep('sample_collectors', req.collector.id, 1);
     return res.status(200).json({ message: 'Step 1 saved.', data: { registration_step: 1 } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -47,15 +50,22 @@ const step2Experience = async (req, res) => {
   try {
     const { experience_years, zone_id } = req.body;
     await pool.query('UPDATE sample_collectors SET experience_years = ?, zone_id = ?, registration_step = GREATEST(registration_step, 2) WHERE id = ?', [experience_years || 0, zone_id || null, req.collector.id]);
+    await clearRejectedStep('sample_collectors', req.collector.id, 2);
     return res.status(200).json({ message: 'Step 2 saved.', data: { registration_step: 2 } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
 const step3Documents = async (req, res) => {
   try {
-    const { aadhaar_url, pan_url, dl_url, profile_photo_url } = req.body;
+    const { aadhaar_url, pan_url, dl_url, profile_photo_url, qualifications } = req.body;
     if (!aadhaar_url || !profile_photo_url) return res.status(400).json({ message: 'aadhaar_url and profile_photo_url required.' });
-    await pool.query('UPDATE sample_collectors SET aadhaar_url = ?, pan_url = ?, dl_url = ?, profile_photo_url = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?', [aadhaar_url, pan_url || null, dl_url || null, profile_photo_url, req.collector.id]);
+    const quals = normalizeQualifications(qualifications);
+    if (quals === undefined) {
+      await pool.query('UPDATE sample_collectors SET aadhaar_url = ?, pan_url = ?, dl_url = ?, profile_photo_url = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?', [aadhaar_url, pan_url || null, dl_url || null, profile_photo_url, req.collector.id]);
+    } else {
+      await pool.query('UPDATE sample_collectors SET aadhaar_url = ?, pan_url = ?, dl_url = ?, profile_photo_url = ?, qualifications = ?, registration_step = GREATEST(registration_step, 3) WHERE id = ?', [aadhaar_url, pan_url || null, dl_url || null, profile_photo_url, quals, req.collector.id]);
+    }
+    await clearRejectedStep('sample_collectors', req.collector.id, 3);
     return res.status(200).json({ message: 'Step 3 saved.', data: { registration_step: 3 } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -69,6 +79,7 @@ const step4Bank = async (req, res) => {
     if (existing.length) await pool.query('UPDATE sample_collector_bank_details SET account_holder_name = ?, bank_name = ?, account_number = ?, ifsc_code = ? WHERE collector_id = ?', [account_holder_name, bank_name, account_number, ifsc_code, collectorId]);
     else await pool.query('INSERT INTO sample_collector_bank_details (collector_id, account_holder_name, bank_name, account_number, ifsc_code) VALUES (?, ?, ?, ?, ?)', [collectorId, account_holder_name, bank_name, account_number, ifsc_code]);
     await pool.query("UPDATE sample_collectors SET registration_step = 4, verification_status = 'pending' WHERE id = ?", [collectorId]);
+    await clearRejectedStep('sample_collectors', collectorId, 4);
     return res.status(200).json({ message: 'Bank details saved. Profile under review.', data: { registration_step: 4, verification_status: 'pending' } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -80,7 +91,7 @@ const getProfile = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: 'Not found.' });
     const p = rows[0];
     const [bankRows] = await pool.query('SELECT account_holder_name, bank_name, account_number, ifsc_code FROM sample_collector_bank_details WHERE collector_id = ?', [req.collector.id]);
-    return res.status(200).json({ message: 'Profile fetched.', data: { id: p.uuid, mobile: p.mobile, registration_step: p.registration_step, verification_status: p.verification_status, rejection_reason: p.rejection_reason, personal: { full_name: p.full_name, email: p.email, date_of_birth: p.date_of_birth, gender: p.gender, profile_photo_url: p.profile_photo_url }, experience: { years: p.experience_years, zone_id: p.zone_id, zone_name: p.zone_name }, documents: { aadhaar_url: p.aadhaar_url, pan_url: p.pan_url, dl_url: p.dl_url }, bank: bankRows[0] || null, status: { is_online: p.is_online, is_active: p.is_active }, stats: { average_rating: p.average_rating, total_collections: p.total_collections, total_earned: p.total_earned } } });
+    return res.status(200).json({ message: 'Profile fetched.', data: { id: p.uuid, mobile: p.mobile, registration_step: p.registration_step, verification_status: p.verification_status, rejection_reason: p.rejection_reason, rejected_steps: p.rejected_steps ? p.rejected_steps.split(',').map(Number) : [], personal: { full_name: p.full_name, email: p.email, date_of_birth: p.date_of_birth, gender: p.gender, profile_photo_url: p.profile_photo_url }, experience: { years: p.experience_years, zone_id: p.zone_id, zone_name: p.zone_name }, documents: { aadhaar_url: p.aadhaar_url, pan_url: p.pan_url, dl_url: p.dl_url }, qualifications: parseQualifications(p.qualifications), bank: bankRows[0] || null, status: { is_online: p.is_online, is_active: p.is_active }, stats: { average_rating: p.average_rating, total_collections: p.total_collections, total_earned: p.total_earned } } });
   } catch (error) { return res.status(500).json({ message: 'Something went wrong.' }); }
 };
 
