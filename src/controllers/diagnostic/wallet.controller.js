@@ -1,4 +1,5 @@
 const { pool } = require('../../config/database');
+const { recordCommission } = require('../../services/commission');
 
 // ─────────────────────────────────────────────
 // DIAGNOSTIC WALLET CONTROLLER
@@ -193,6 +194,10 @@ const creditAfterComplete = async (centerId, bookingId, amount, paymentType) => 
     // Record admin due
     await pool.query('INSERT INTO diagnostic_admin_dues (diagnostic_center_id, booking_id, amount, commission_percent, booking_amount, payment_type) VALUES (?, ?, ?, ?, ?, ?)',
       [centerId, bookingId, commission, commissionPercent, amount, paymentType]);
+
+    // Admin commission ledger
+    const [bkRow] = await pool.query('SELECT user_id, booking_id FROM bookings WHERE id = ?', [bookingId]);
+    await recordCommission({ module: 'diagnostic', reference_type: 'booking', reference_id: bookingId, reference_code: bkRow[0]?.booking_id || null, user_id: bkRow[0]?.user_id || null, vendor_type: 'diagnostic_center', vendor_id: centerId, gross_amount: parseFloat(amount), commission_percent: commissionPercent, commission_amount: commission });
 
   } catch (error) {
     console.error('creditAfterComplete error:', error.message);

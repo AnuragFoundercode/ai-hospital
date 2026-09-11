@@ -8,6 +8,8 @@ const supportController = require('../../controllers/admin/support.controller');
 const policyController = require('../../controllers/admin/policy.controller');
 const userController = require('../../controllers/admin/user.controller');
 const vendorController = require('../../controllers/admin/vendor.controller');
+const commissionController = require('../../controllers/admin/commission.controller');
+const adminDoctorController = require('../../controllers/admin/doctor.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -45,6 +47,10 @@ router.put('/config/:key', adminAuth, configController.updateConfig);
 router.get('/users', adminAuth, userController.getUsers);
 router.get('/users/:id/overview', adminAuth, userController.getUserOverview);
 router.get('/users/:id/bookings', adminAuth, userController.getUserBookings);
+router.get('/users/:id/addresses', adminAuth, userController.getUserAddresses);
+router.get('/users/:id/credit-requests', adminAuth, userController.getUserCreditRequests);
+router.get('/users/:id/wallet-transactions', adminAuth, userController.getUserWalletTransactions);
+router.put('/credit-requests/:application_id/review', adminAuth, userController.reviewCreditRequest);
 router.put('/users/:id/toggle-status', adminAuth, userController.toggleUserStatus);
 router.put('/users/:id/credit-limit', adminAuth, userController.updateCreditLimit);
 
@@ -53,6 +59,20 @@ router.get('/vendors/:type', adminAuth, vendorController.getVendors);
 router.get('/vendors/:type/:id', adminAuth, vendorController.getVendorDetail);
 router.put('/vendors/:type/:id/approve', adminAuth, vendorController.approveVendor);
 router.put('/vendors/:type/:id/reject', adminAuth, vendorController.rejectVendor);
+
+// Doctor Management
+router.get('/doctors', adminAuth, adminDoctorController.getDoctors);
+router.get('/doctors/:id', adminAuth, adminDoctorController.getDoctorDetail);
+router.put('/doctors/:id/toggle-status', adminAuth, adminDoctorController.toggleDoctorStatus);
+router.get('/doctors/:id/appointments', adminAuth, adminDoctorController.getDoctorAppointments);
+router.get('/doctors/:id/transactions', adminAuth, adminDoctorController.getDoctorTransactions);
+router.get('/doctors/:id/withdrawals', adminAuth, adminDoctorController.getDoctorWithdrawals);
+
+// Commission / Profit reports (order-wise, user-wise, vendor-wise)
+router.get('/commissions/summary', adminAuth, commissionController.getCommissionSummary);
+router.get('/commissions/by-user', adminAuth, commissionController.getCommissionByUser);
+router.get('/commissions/by-vendor', adminAuth, commissionController.getCommissionByVendor);
+router.get('/commissions', adminAuth, commissionController.getCommissions);
 
 // Help & Support — contact + FAQs
 router.get('/support/contact', adminAuth, supportController.getContact);

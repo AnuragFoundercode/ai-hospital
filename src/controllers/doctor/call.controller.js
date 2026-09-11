@@ -4,6 +4,7 @@ const walletModel = require('../../models/doctor/wallet.model');
 const notificationService = require('../../services/notification.service');
 const { sendToClient } = require('../../events/sse');
 const { notify } = require('../../services/notify');
+const { recordCommission } = require('../../services/commission');
 
 // Fallback admin commission % if a doctor has none set
 const DEFAULT_ADMIN_COMMISSION_PERCENT = 15;
@@ -254,7 +255,7 @@ const acceptCall = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
     const { call_id } = req.params;
-    const [callRows] = await pool.query("SELECT * FROM doctor_calls WHERE call_id = ? AND doctor_id = ?", [call_id, doctorId]);
+    const [callRows] = await pool.query("SELECT dc.*, u.uuid AS user_uuid, u.full_name AS user_name, u.profile_photo AS user_photo, u.mobile AS user_mobile FROM doctor_calls dc JOIN users u ON dc.user_id = u.id WHERE dc.call_id = ? AND dc.doctor_id = ?", [call_id, doctorId]);
     if (!callRows.length) return res.status(404).json({ message: 'Call not found.' });
     const call = callRows[0];
     if (call.status !== 'ringing') return res.status(400).json({ message: `Call is already ${call.status}.` });
@@ -273,7 +274,11 @@ const acceptCall = async (req, res) => {
 
     return res.status(200).json({
       message: 'Call accepted.',
-      data: { call_id: call.call_id, status: 'ongoing', channel_name: call.channel_name, agora: { app_id: doctorToken.appId, token: doctorToken.token, channel_name: call.channel_name, uid: doctorId } },
+      data: {
+        call_id: call.call_id, status: 'ongoing', channel_name: call.channel_name,
+        user: { id: call.user_uuid, name: call.user_name, profile_photo: call.user_photo, mobile: call.user_mobile },
+        agora: { app_id: doctorToken.appId, token: doctorToken.token, channel_name: call.channel_name, uid: doctorId },
+      },
     });
   } catch (error) { console.error('acceptCall error:', error.message); return res.status(500).json({ message: 'Something went wrong.' }); }
 };
@@ -285,7 +290,7 @@ const rejectCall = async (req, res) => {
   try {
     const doctorId = req.doctor.id;
     const { call_id } = req.params;
-    const [callRows] = await pool.query("SELECT * FROM doctor_calls WHERE call_id = ? AND doctor_id = ?", [call_id, doctorId]);
+    const [callRows] = await pool.query("SELECT dc.*, u.uuid AS user_uuid, u.full_name AS user_name, u.profile_photo AS user_photo, u.mobile AS user_mobile FROM doctor_calls dc JOIN users u ON dc.user_id = u.id WHERE dc.call_id = ? AND dc.doctor_id = ?", [call_id, doctorId]);
     if (!callRows.length) return res.status(404).json({ message: 'Call not found.' });
     const call = callRows[0];
     if (call.status !== 'ringing') return res.status(400).json({ message: `Call is already ${call.status}.` });
@@ -356,6 +361,10 @@ async function endCallInternal(call, endedBy, reason) {
     "UPDATE doctor_calls SET status = ?, ended_at = NOW(), ended_by = ?, end_reason = ?, doctor_earning = ?, admin_commission = ? WHERE id = ?",
     [finalStatus, endedBy, reason, doctorEarning, commission, call.id]
   );
+
+  if (finalStatus === 'completed' && commission > 0) {
+    await recordCommission({ module: 'doctor', reference_type: 'call', reference_id: call.id, reference_code: call.call_id, user_id: call.user_id, vendor_type: 'doctor', vendor_id: call.doctor_id, gross_amount: totalCharged, commission_percent: commissionPercent, commission_amount: commission });
+  }
 
   // Free the doctor
   await pool.query("UPDATE doctors SET call_status = 'online' WHERE id = ?", [call.doctor_id]);

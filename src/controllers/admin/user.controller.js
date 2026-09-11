@@ -1,4 +1,5 @@
 const { pool } = require('../../config/database');
+const { notify } = require('../../services/notify');
 
 // ─────────────────────────────────────────────
 // ADMIN USER MANAGEMENT
@@ -405,10 +406,151 @@ const getUserBookings = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/admin/users/:id/addresses
+ * All saved addresses for a user.
+ */
+const getUserAddresses = async (req, res) => {
+  try {
+    const [uRows] = await pool.query('SELECT id FROM users WHERE uuid = ?', [req.params.id]);
+    if (!uRows.length) return res.status(404).json({ message: 'User not found.' });
+    const [rows] = await pool.query(
+      'SELECT id, label, address_line1, address_line2, city, state, pincode, latitude, longitude, is_default, created_at FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC',
+      [uRows[0].id]
+    );
+    return res.status(200).json({ message: 'Addresses fetched.', data: rows });
+  } catch (error) {
+    console.error('admin getUserAddresses error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/admin/users/:id/credit-requests?status=&page=&limit=
+ * A user's credit applications.
+ */
+const getUserCreditRequests = async (req, res) => {
+  try {
+    const [uRows] = await pool.query('SELECT id FROM users WHERE uuid = ?', [req.params.id]);
+    if (!uRows.length) return res.status(404).json({ message: 'User not found.' });
+    const uid = uRows[0].id;
+
+    const { status, page = 1, limit = 20 } = req.query;
+    const where = ['user_id = ?']; const params = [uid];
+    if (status) { where.push('status = ?'); params.push(status); }
+    const whereClause = where.join(' AND ');
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const [[cnt]] = await pool.query(`SELECT COUNT(*) AS total FROM credit_applications WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT id, application_id, amount, purpose, employment_type, monthly_income, remark,
+              aadhaar_card_url, pan_card_url, income_proof_url, status, admin_remark, reviewed_at, created_at
+       FROM credit_applications WHERE ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+    return res.status(200).json({
+      message: 'Credit requests fetched.',
+      data: rows,
+      pagination: { page: pageNum, limit: limitNum, total: cnt.total, total_pages: Math.ceil(cnt.total / limitNum) },
+    });
+  } catch (error) {
+    console.error('admin getUserCreditRequests error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/credit-requests/:application_id/review
+ * Body: { status: 'approved'|'rejected', admin_remark }
+ * On approve, the amount is added to the user's credit_limit.
+ */
+const reviewCreditRequest = async (req, res) => {
+  try {
+    const { application_id } = req.params;
+    const { status, admin_remark } = req.body;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: "status must be 'approved' or 'rejected'." });
+
+    const [rows] = await pool.query('SELECT id, user_id, amount, status FROM credit_applications WHERE application_id = ?', [application_id]);
+    if (!rows.length) return res.status(404).json({ message: 'Credit request not found.' });
+    const app = rows[0];
+    if (app.status !== 'pending') return res.status(400).json({ message: `Already ${app.status}.` });
+
+    if (status === 'approved') {
+      // Ensure the user still has enough available credit limit
+      const [uRow] = await pool.query('SELECT credit_limit FROM users WHERE id = ?', [app.user_id]);
+      const availableLimit = parseFloat(uRow[0].credit_limit) || 0;
+      const loanAmount = parseFloat(app.amount);
+      if (loanAmount > availableLimit) {
+        return res.status(400).json({ message: `Cannot approve. Amount ₹${loanAmount} exceeds user's available credit limit ₹${availableLimit}.` });
+      }
+
+      // Loan disbursed: deduct from credit_limit, add to wallet
+      await pool.query('UPDATE users SET credit_limit = credit_limit - ? WHERE id = ?', [loanAmount, app.user_id]);
+      const walletModel = require('../../models/user/wallet.model');
+      await walletModel.credit(app.user_id, loanAmount, `Credit loan disbursed - ${application_id}`, 'admin_credit', app.id, 'admin');
+    }
+
+    await pool.query('UPDATE credit_applications SET status = ?, admin_remark = ?, reviewed_at = NOW() WHERE id = ?', [status, admin_remark || null, app.id]);
+
+    await notify('user', app.user_id, {
+      title: status === 'approved' ? 'Credit Approved ✅' : 'Credit Request Rejected ❌',
+      body: status === 'approved' ? `₹${app.amount} has been added to your wallet.` : `Your credit request was rejected. ${admin_remark || ''}`,
+      type: 'system', reference_type: 'credit_application', reference_id: app.id,
+      data: { event: 'credit_reviewed', status },
+    });
+
+    return res.status(200).json({ message: `Credit request ${status}.`, data: { application_id, status } });
+  } catch (error) {
+    console.error('admin reviewCreditRequest error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/admin/users/:id/wallet-transactions?type=&page=&limit=
+ * A user's wallet transaction history.
+ */
+const getUserWalletTransactions = async (req, res) => {
+  try {
+    const [uRows] = await pool.query('SELECT id FROM users WHERE uuid = ?', [req.params.id]);
+    if (!uRows.length) return res.status(404).json({ message: 'User not found.' });
+    const uid = uRows[0].id;
+
+    const { type, page = 1, limit = 20 } = req.query;
+    const where = ['user_id = ?']; const params = [uid];
+    if (type) { where.push('type = ?'); params.push(type); }
+    const whereClause = where.join(' AND ');
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const [[cnt]] = await pool.query(`SELECT COUNT(*) AS total FROM wallet_transactions WHERE ${whereClause}`, params);
+    const [rows] = await pool.query(
+      `SELECT id, type, amount, description, reference_type, reference_id, balance_after, created_at
+       FROM wallet_transactions WHERE ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+    return res.status(200).json({
+      message: 'Wallet transactions fetched.',
+      data: rows,
+      pagination: { page: pageNum, limit: limitNum, total: cnt.total, total_pages: Math.ceil(cnt.total / limitNum) },
+    });
+  } catch (error) {
+    console.error('admin getUserWalletTransactions error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getUsers,
   getUserOverview,
   getUserBookings,
+  getUserAddresses,
+  getUserCreditRequests,
+  reviewCreditRequest,
+  getUserWalletTransactions,
   toggleUserStatus,
   updateCreditLimit,
 };

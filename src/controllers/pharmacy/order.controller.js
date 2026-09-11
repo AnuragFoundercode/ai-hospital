@@ -51,11 +51,46 @@ const getOrderDetail = async (req, res) => {
     if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
     const o = rows[0];
 
+    // Delivery leg: partner + live delivery status + OTP (latest request for this order)
+    const [delRows] = await pool.query(
+      `SELECT dr.request_id, dr.status AS delivery_status, dr.distance_km, dr.delivery_fee, dr.delivery_earning, dr.delivery_otp,
+              dr.assigned_at, dr.picked_up_at, dr.reached_at, dr.delivered_at,
+              dp.uuid AS partner_uuid, dp.full_name AS partner_name, dp.mobile AS partner_mobile,
+              dp.profile_photo AS partner_photo, dp.vehicle_type, dp.average_rating AS partner_rating,
+              dp.latitude AS partner_latitude, dp.longitude AS partner_longitude
+       FROM delivery_requests dr
+       LEFT JOIN delivery_partners dp ON dr.partner_id = dp.id
+       WHERE dr.order_id = ?
+       ORDER BY dr.id DESC LIMIT 1`,
+      [o.id]
+    );
+    const d = delRows[0] || null;
+    const delivery = d ? {
+      request_id: d.request_id,
+      status: d.delivery_status,
+      distance_km: d.distance_km,
+      delivery_fee: d.delivery_fee,
+      delivery_earning: d.delivery_earning,
+      delivery_otp: d.delivery_status === 'reached' ? d.delivery_otp : null,
+      partner: d.partner_uuid ? {
+        id: d.partner_uuid,
+        name: d.partner_name,
+        mobile: d.partner_mobile,
+        profile_photo: d.partner_photo,
+        vehicle_type: d.vehicle_type,
+        rating: d.partner_rating,
+        latitude: d.partner_latitude,
+        longitude: d.partner_longitude,
+      } : null,
+      timeline: { assigned_at: d.assigned_at, picked_up_at: d.picked_up_at, reached_at: d.reached_at, delivered_at: d.delivered_at },
+    } : null;
+
     return res.status(200).json({
       message: 'Order detail fetched.',
       data: {
         order_id: o.order_id, status: o.status,
         customer: { name: o.customer_name, mobile: o.customer_mobile, email: o.customer_email },
+        delivery,
         items: typeof o.items === 'string' ? JSON.parse(o.items) : o.items,
         total_items: o.total_items,
         prescription: { required: o.prescription_required, url: o.prescription_url },

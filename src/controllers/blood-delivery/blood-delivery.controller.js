@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { notify } = require('../../services/notify');
 const { clearRejectedStep } = require('../../utils/rejectedSteps');
 const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
+const { recordCommission } = require('../../services/commission');
 
 // ─────────────────────────────────────────────
 // BLOOD DELIVERY PARTNER CONTROLLER
@@ -508,6 +509,10 @@ const markDelivered = async (req, res) => {
       "INSERT INTO blood_delivery_wallet_transactions (delivery_partner_id, type, amount, description, reference_type, reference_id, admin_commission, balance_after) VALUES (?, 'credit', ?, ?, 'delivery_earning', ?, ?, ?)",
       [partnerId, partnerEarning, `Blood delivery ${d.request_id} completed. Fee: ₹${d.delivery_fee}, commission: ₹${partnerAdminCommission.toFixed(2)}, distance: ${d.distance_km} km`, d.id, partnerAdminCommission, dpWallet[0].balance]
     );
+
+    // Admin commission ledger: blood bank + blood delivery fee
+    await recordCommission({ module: 'blood_bank', reference_type: 'blood_request', reference_id: d.blood_request_id, reference_code: d.blood_request_code, user_id: d.user_id, vendor_type: 'blood_bank', vendor_id: d.blood_bank_id, gross_amount: bloodAmount, commission_percent: bankCommissionPct, commission_amount: bankAdminCommission });
+    await recordCommission({ module: 'blood_delivery', reference_type: 'blood_delivery_request', reference_id: d.id, reference_code: d.request_id, user_id: d.user_id, vendor_type: 'blood_delivery_partner', vendor_id: partnerId, gross_amount: parseFloat(d.delivery_fee) || 0, commission_percent: parseFloat(d.admin_commission_percent) || 0, commission_amount: partnerAdminCommission });
 
     // 5) Notify user + blood bank
     await notify('user', d.user_id, {

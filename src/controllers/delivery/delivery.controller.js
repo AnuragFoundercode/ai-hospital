@@ -5,6 +5,7 @@ const notificationService = require('../../services/notification.service');
 const { notify } = require('../../services/notify');
 const { clearRejectedStep } = require('../../utils/rejectedSteps');
 const { normalizeQualifications, parseQualifications } = require('../../utils/qualifications');
+const { recordCommission } = require('../../services/commission');
 
 // ─────────────────────────────────────────────
 // DELIVERY PARTNER CONTROLLER
@@ -539,6 +540,10 @@ const markDelivered = async (req, res) => {
     await pool.query('UPDATE pharmacy_wallets SET balance = balance + ?, total_earned = total_earned + ? WHERE pharmacy_id = ?', [pharmacyEarning, pharmacyEarning, delivery.pharmacy_id]);
     const [phWallet] = await pool.query('SELECT balance FROM pharmacy_wallets WHERE pharmacy_id = ?', [delivery.pharmacy_id]);
     await pool.query("INSERT INTO pharmacy_wallet_transactions (pharmacy_id, type, amount, description, reference_type, reference_id, admin_commission, balance_after) VALUES (?, 'credit', ?, ?, 'order_fee', ?, ?, ?)", [delivery.pharmacy_id, pharmacyEarning, `Order delivered. Commission: ₹${adminCommission.toFixed(2)}`, delivery.order_id, adminCommission, phWallet[0].balance]);
+
+    // Admin commission ledger: pharmacy order + delivery fee
+    await recordCommission({ module: 'pharmacy', reference_type: 'order', reference_id: delivery.order_id, reference_code: delivery.request_id, user_id: delivery.user_id, vendor_type: 'pharmacy', vendor_id: delivery.pharmacy_id, gross_amount: totalAmount, commission_percent: commissionPercent, commission_amount: adminCommission });
+    await recordCommission({ module: 'delivery', reference_type: 'delivery_request', reference_id: delivery.id, reference_code: delivery.request_id, user_id: delivery.user_id, vendor_type: 'delivery_partner', vendor_id: req.delivery.id, gross_amount: parseFloat(delivery.delivery_fee) || 0, commission_percent: parseFloat(delivery.admin_commission_percent) || 0, commission_amount: dpCommission });
 
     // Notify user + pharmacy that the order was delivered
     await notify('user', delivery.user_id, {

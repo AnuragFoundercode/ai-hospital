@@ -3,6 +3,7 @@ const notificationService = require('../../services/notification.service');
 const distanceService = require('../../services/distance.service');
 const { notify } = require('../../services/notify');
 const { sendToClient } = require('../../events/sse');
+const { recordCommission } = require('../../services/commission');
 
 // ─────────────────────────────────────────────
 // BLOOD BANK REQUEST MANAGEMENT
@@ -429,6 +430,9 @@ const markComplete = async (req, res) => {
       `INSERT INTO bloodbank_wallet_transactions (blood_bank_id, type, amount, description, reference_type, reference_id, admin_commission, balance_after) VALUES (?, 'credit', ?, ?, 'blood_request_fee', ?, ?, ?)`,
       [bankId, bankEarning, `Blood request ${request_id} completed. Commission: ₹${adminCommission.toFixed(2)}`, rows[0].id, adminCommission, walletRow[0].balance]
     );
+
+    // Admin commission ledger (direct pickup complete — no delivery leg)
+    await recordCommission({ module: 'blood_bank', reference_type: 'blood_request', reference_id: rows[0].id, reference_code: request_id, user_id: rows[0].user_id, vendor_type: 'blood_bank', vendor_id: bankId, gross_amount: totalAmount, commission_percent: commissionPercent, commission_amount: adminCommission });
 
     // Refresh summary (available = non-expired available bags)
     await refreshSummary(bankId, rows[0].blood_group);
