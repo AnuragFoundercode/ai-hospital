@@ -273,6 +273,98 @@ const getDoctorWithdrawals = async (req, res) => {
   }
 };
 
+// ─── DOCTOR CATEGORIES (specializations) ───
+
+/**
+ * GET /api/v1/admin/doctor-categories?is_active=&search=
+ */
+const getCategories = async (req, res) => {
+  try {
+    const { is_active, search } = req.query;
+    const where = ['1=1']; const params = [];
+    if (is_active !== undefined) { where.push('is_active = ?'); params.push(parseInt(is_active)); }
+    if (search) { where.push('name LIKE ?'); params.push(`%${search}%`); }
+    const [rows] = await pool.query(
+      `SELECT id, name, icon_url, is_active, sort_order, created_at FROM doctor_categories WHERE ${where.join(' AND ')} ORDER BY sort_order ASC, name ASC`,
+      params
+    );
+    return res.status(200).json({ message: 'Categories fetched.', data: rows });
+  } catch (error) {
+    console.error('admin getCategories error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * POST /api/v1/admin/doctor-categories
+ * Body: { name, icon_url, sort_order }
+ */
+const createCategory = async (req, res) => {
+  try {
+    const { name, icon_url, sort_order = 0 } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ message: 'name is required.' });
+
+    const [dup] = await pool.query('SELECT id FROM doctor_categories WHERE name = ?', [name.trim()]);
+    if (dup.length) return res.status(409).json({ message: 'Category already exists.' });
+
+    const [result] = await pool.query(
+      'INSERT INTO doctor_categories (name, icon_url, sort_order) VALUES (?, ?, ?)',
+      [name.trim(), icon_url || null, parseInt(sort_order) || 0]
+    );
+    return res.status(201).json({ message: 'Category created.', data: { id: result.insertId, name: name.trim(), icon_url: icon_url || null, sort_order: parseInt(sort_order) || 0 } });
+  } catch (error) {
+    console.error('admin createCategory error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/doctor-categories/:id
+ * Body: { name, icon_url, sort_order, is_active }
+ */
+const updateCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, icon_url, sort_order, is_active } = req.body;
+
+    const fields = []; const values = [];
+    if (name !== undefined) {
+      if (!name.trim()) return res.status(400).json({ message: 'name cannot be empty.' });
+      const [dup] = await pool.query('SELECT id FROM doctor_categories WHERE name = ? AND id <> ?', [name.trim(), id]);
+      if (dup.length) return res.status(409).json({ message: 'Another category already uses this name.' });
+      fields.push('name = ?'); values.push(name.trim());
+    }
+    if (icon_url !== undefined) { fields.push('icon_url = ?'); values.push(icon_url); }
+    if (sort_order !== undefined) { fields.push('sort_order = ?'); values.push(parseInt(sort_order) || 0); }
+    if (is_active !== undefined) { fields.push('is_active = ?'); values.push(is_active ? 1 : 0); }
+    if (!fields.length) return res.status(400).json({ message: 'Nothing to update.' });
+
+    values.push(id);
+    const [result] = await pool.query(`UPDATE doctor_categories SET ${fields.join(', ')} WHERE id = ?`, values);
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Category not found.' });
+    return res.status(200).json({ message: 'Category updated.' });
+  } catch (error) {
+    console.error('admin updateCategory error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/doctor-categories/:id/toggle-status
+ */
+const toggleCategoryStatus = async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, is_active FROM doctor_categories WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ message: 'Category not found.' });
+    const next = rows[0].is_active ? 0 : 1;
+    await pool.query('UPDATE doctor_categories SET is_active = ? WHERE id = ?', [next, rows[0].id]);
+    return res.status(200).json({ message: next ? 'Category activated.' : 'Category deactivated.', data: { id: rows[0].id, is_active: !!next } });
+  } catch (error) {
+    console.error('admin toggleCategoryStatus error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getDoctors,
   toggleDoctorStatus,
@@ -280,4 +372,8 @@ module.exports = {
   getDoctorAppointments,
   getDoctorTransactions,
   getDoctorWithdrawals,
+  getCategories,
+  createCategory,
+  updateCategory,
+  toggleCategoryStatus,
 };

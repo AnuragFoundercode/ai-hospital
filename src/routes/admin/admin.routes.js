@@ -10,6 +10,7 @@ const userController = require('../../controllers/admin/user.controller');
 const vendorController = require('../../controllers/admin/vendor.controller');
 const commissionController = require('../../controllers/admin/commission.controller');
 const adminDoctorController = require('../../controllers/admin/doctor.controller');
+const adminPharmacyController = require('../../controllers/admin/pharmacy.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -67,6 +68,21 @@ router.put('/doctors/:id/toggle-status', adminAuth, adminDoctorController.toggle
 router.get('/doctors/:id/appointments', adminAuth, adminDoctorController.getDoctorAppointments);
 router.get('/doctors/:id/transactions', adminAuth, adminDoctorController.getDoctorTransactions);
 router.get('/doctors/:id/withdrawals', adminAuth, adminDoctorController.getDoctorWithdrawals);
+
+// Doctor Categories (specializations)
+router.get('/doctor-categories', adminAuth, adminDoctorController.getCategories);
+router.post('/doctor-categories', adminAuth, adminDoctorController.createCategory);
+router.put('/doctor-categories/:id', adminAuth, adminDoctorController.updateCategory);
+router.put('/doctor-categories/:id/toggle-status', adminAuth, adminDoctorController.toggleCategoryStatus);
+
+// Pharmacy Management
+router.get('/pharmacies', adminAuth, adminPharmacyController.getPharmacies);
+router.get('/pharmacies/:id', adminAuth, adminPharmacyController.getPharmacyDetail);
+router.put('/pharmacies/:id/toggle-status', adminAuth, adminPharmacyController.togglePharmacyStatus);
+router.get('/pharmacies/:id/transactions', adminAuth, adminPharmacyController.getPharmacyTransactions);
+router.get('/pharmacies/:id/withdrawals', adminAuth, adminPharmacyController.getPharmacyWithdrawals);
+router.get('/pharmacies/:id/orders', adminAuth, adminPharmacyController.getPharmacyOrders);
+router.get('/pharmacies/:id/products', adminAuth, adminPharmacyController.getPharmacyProducts);
 
 // Commission / Profit reports (order-wise, user-wise, vendor-wise)
 router.get('/commissions/summary', adminAuth, commissionController.getCommissionSummary);
