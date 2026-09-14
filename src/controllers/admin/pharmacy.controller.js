@@ -373,6 +373,221 @@ const getPharmacyProducts = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/admin/pharmacy-orders
+ * Global pharmacy order list.
+ * Filters: zone_id, pharmacy_id (uuid), status, payment_status, from, to, search (order_id/customer/mobile). Pagination.
+ */
+const getAllOrders = async (req, res) => {
+  try {
+    const { zone_id, pharmacy_id, status, payment_status, from, to, search, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const where = ['1=1']; const params = [];
+    if (zone_id) { where.push('p.zone_id = ?'); params.push(parseInt(zone_id)); }
+    if (pharmacy_id) { where.push('p.uuid = ?'); params.push(pharmacy_id); }
+    if (status) { where.push('po.status = ?'); params.push(status); }
+    if (payment_status) { where.push('po.payment_status = ?'); params.push(payment_status); }
+    if (from) { where.push('po.created_at >= ?'); params.push(from); }
+    if (to) { where.push('po.created_at <= ?'); params.push(`${to} 23:59:59`); }
+    if (search) { where.push('(po.order_id LIKE ? OR u.full_name LIKE ? OR u.mobile LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    const whereClause = where.join(' AND ');
+
+    const [[cnt]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM pharmacy_orders po JOIN pharmacies p ON po.pharmacy_id = p.id JOIN users u ON po.user_id = u.id WHERE ${whereClause}`, params
+    );
+    const [rows] = await pool.query(
+      `SELECT po.order_id, po.status, po.payment_status, po.final_amount, po.created_at,
+              u.full_name AS customer_name, u.mobile AS customer_mobile,
+              p.name AS pharmacy_name, p.zone_id, z.name AS zone_name,
+              dp.full_name AS dp_name, dp.mobile AS dp_mobile, dp.vehicle_type AS dp_vehicle
+       FROM pharmacy_orders po
+       JOIN pharmacies p ON po.pharmacy_id = p.id
+       JOIN users u ON po.user_id = u.id
+       LEFT JOIN zones z ON p.zone_id = z.id
+       LEFT JOIN delivery_partners dp ON po.delivery_partner_id = dp.id
+       WHERE ${whereClause} ORDER BY po.created_at DESC LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+
+    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toISOString().split('T')[0];
+    const [[summary]] = await pool.query(
+      `SELECT COUNT(*) AS total,
+              SUM(DATE(created_at) = ?) AS today,
+              SUM(status = 'delivered') AS delivered,
+              SUM(status IN ('cancelled','rejected')) AS cancelled,
+              SUM(status NOT IN ('delivered','cancelled','rejected')) AS pending
+       FROM pharmacy_orders`, [today]
+    );
+
+    return res.status(200).json({
+      message: 'Orders fetched.',
+      summary: {
+        total_orders: summary.total,
+        todays_orders: Number(summary.today) || 0,
+        pending_orders: Number(summary.pending) || 0,
+        delivered_orders: Number(summary.delivered) || 0,
+        cancelled_orders: Number(summary.cancelled) || 0,
+      },
+      data: rows.map((o) => ({
+        order_id: o.order_id,
+        patient_name: o.customer_name,
+        mobile: o.customer_mobile,
+        zone: o.zone_name,
+        pharmacy_name: o.pharmacy_name,
+        delivery_partner: o.dp_name ? { name: o.dp_name, mobile: o.dp_mobile, vehicle_type: o.dp_vehicle } : null,
+        amount: o.final_amount,
+        status: o.status,
+        payment_status: o.payment_status,
+        order_date: o.created_at,
+      })),
+      pagination: { page: pageNum, limit: limitNum, total: cnt.total, total_pages: Math.ceil(cnt.total / limitNum) },
+    });
+  } catch (error) {
+    console.error('admin getAllOrders error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/admin/pharmacy-orders/:order_id
+ * Complete order view.
+ */
+const getOrderDetail = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT po.*, u.full_name AS customer_name, u.mobile AS customer_mobile,
+              p.name AS pharmacy_name, p.owner_name AS pharmacy_owner, p.mobile AS pharmacy_mobile,
+              p.address_line1 AS ph_addr1, p.address_line2 AS ph_addr2, p.city AS ph_city, p.state AS ph_state, p.pincode AS ph_pincode,
+              p.admin_commission_percent, p.zone_id, z.name AS zone_name,
+              dp.uuid AS dp_uuid, dp.full_name AS dp_name, dp.mobile AS dp_mobile, dp.profile_photo AS dp_photo, dp.vehicle_type AS dp_vehicle
+       FROM pharmacy_orders po
+       JOIN users u ON po.user_id = u.id
+       JOIN pharmacies p ON po.pharmacy_id = p.id
+       LEFT JOIN zones z ON p.zone_id = z.id
+       LEFT JOIN delivery_partners dp ON po.delivery_partner_id = dp.id
+       WHERE po.order_id = ?`,
+      [req.params.order_id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Order not found.' });
+    const o = rows[0];
+
+    // delivery request (coords + times)
+    let dr = null;
+    if (o.delivery_request_id) {
+      const [drRows] = await pool.query('SELECT * FROM delivery_requests WHERE id = ?', [o.delivery_request_id]);
+      dr = drRows[0] || null;
+    }
+
+    const drop = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address || '{}') : (o.delivery_address || {});
+    const items = typeof o.items === 'string' ? JSON.parse(o.items || '[]') : (o.items || []);
+
+    // pricing / profit
+    const finalAmount = parseFloat(o.final_amount) || 0;
+    const commissionPct = parseFloat(o.admin_commission_percent) || 0;
+    const adminOrderCommission = parseFloat((finalAmount * (commissionPct / 100)).toFixed(2));
+    const adminDeliveryCommission = parseFloat(o.delivery_admin_commission) || 0;
+    const pharmacyEarning = parseFloat((finalAmount - adminOrderCommission).toFixed(2));
+    const taxAmount = parseFloat(o.tax_amount) || 0;
+    const baseAmount = parseFloat(o.base_amount) || 0;
+    const taxPercent = baseAmount > 0 ? parseFloat(((taxAmount / baseAmount) * 100).toFixed(2)) : 0;
+
+    // timeline from order timestamps
+    const timeline = [];
+    const push = (statusLabel, time) => { if (time) timeline.push({ status: statusLabel, time }); };
+    push('Order Placed', o.created_at);
+    push('Pharmacy Accepted', o.accepted_at);
+    push('Packed', o.packed_at);
+    push('Ready', o.ready_at);
+    push('Pickup Completed', dr?.picked_up_at);
+    push('Out for Delivery', o.dispatched_at);
+    push('Delivered', o.delivered_at);
+    push('Cancelled', o.cancelled_at);
+
+    return res.status(200).json({
+      message: 'Order detail fetched.',
+      data: {
+        order_information: {
+          order_id: o.order_id,
+          order_date: o.created_at,
+          order_status: o.status,
+          payment_status: o.payment_status,
+          zone: o.zone_name,
+          payment_method: o.payment_method,
+          transaction_id: o.transaction_id,
+        },
+        customer_information: {
+          patient_name: o.customer_name,
+          mobile: o.customer_mobile,
+          address: drop.address_line1 || drop.address || null,
+        },
+        pickup_address: {
+          pharmacy_name: o.pharmacy_name,
+          contact_person: o.pharmacy_owner,
+          mobile: o.pharmacy_mobile,
+          address: [o.ph_addr1, o.ph_addr2, o.ph_city, o.ph_state, o.ph_pincode].filter(Boolean).join(', '),
+        },
+        delivery_address: {
+          address: drop.address_line1 || drop.address || null,
+          landmark: drop.landmark || null,
+          city: drop.city || null,
+          state: drop.state || null,
+          pincode: drop.pincode || null,
+        },
+        delivery_partner: o.dp_uuid ? {
+          id: o.dp_uuid,
+          profile_photo: o.dp_photo,
+          name: o.dp_name,
+          mobile: o.dp_mobile,
+          vehicle_type: o.dp_vehicle,
+          vehicle_number: null,
+          assigned_time: dr?.assigned_at || null,
+          pickup_time: dr?.picked_up_at || null,
+          delivered_time: dr?.delivered_at || o.delivered_at || null,
+        } : null,
+        medicines: {
+          items: items.map((it) => {
+            const qty = it.qty || it.quantity || 1;
+            const unit = parseFloat(it.selling_price || it.price || it.unit_price || 0);
+            const disc = parseFloat(it.discount || 0);
+            return { name: it.name, quantity: qty, unit_price: unit, discount: disc, total_price: parseFloat((unit * qty - disc).toFixed(2)) };
+          }),
+          total_items: o.total_items,
+          total_medicine_amount: baseAmount,
+        },
+        payment_summary: {
+          medicine_amount: baseAmount,
+          delivery_charge: parseFloat(o.delivery_charge) || 0,
+          discount: parseFloat(o.discount_amount) || 0,
+          tax_amount: taxAmount,
+          tax_percent: taxPercent,
+          total_amount: finalAmount,
+          pharmacy_earnings: pharmacyEarning,
+          admin_profit: parseFloat((adminOrderCommission + adminDeliveryCommission).toFixed(2)),
+        },
+        delivery_tracking: {
+          pickup_time: dr?.picked_up_at || null,
+          dispatch_time: o.dispatched_at || null,
+          estimated_delivery_time: dr?.reached_at || null,
+          delivered_time: o.delivered_at || null,
+          total_distance_km: dr?.distance_km || o.delivery_distance_km || null,
+          pickup_latitude: dr?.pickup_latitude || null,
+          pickup_longitude: dr?.pickup_longitude || null,
+          delivery_latitude: dr?.drop_latitude || null,
+          delivery_longitude: dr?.drop_longitude || null,
+        },
+        order_timeline: timeline,
+        order_notes: o.remark || null,
+      },
+    });
+  } catch (error) {
+    console.error('admin getOrderDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getPharmacies,
   togglePharmacyStatus,
@@ -381,4 +596,6 @@ module.exports = {
   getPharmacyWithdrawals,
   getPharmacyOrders,
   getPharmacyProducts,
+  getAllOrders,
+  getOrderDetail,
 };

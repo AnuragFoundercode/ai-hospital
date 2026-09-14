@@ -11,6 +11,7 @@ const vendorController = require('../../controllers/admin/vendor.controller');
 const commissionController = require('../../controllers/admin/commission.controller');
 const adminDoctorController = require('../../controllers/admin/doctor.controller');
 const adminPharmacyController = require('../../controllers/admin/pharmacy.controller');
+const adminLabController = require('../../controllers/admin/lab.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -83,6 +84,21 @@ router.get('/pharmacies/:id/transactions', adminAuth, adminPharmacyController.ge
 router.get('/pharmacies/:id/withdrawals', adminAuth, adminPharmacyController.getPharmacyWithdrawals);
 router.get('/pharmacies/:id/orders', adminAuth, adminPharmacyController.getPharmacyOrders);
 router.get('/pharmacies/:id/products', adminAuth, adminPharmacyController.getPharmacyProducts);
+
+// Pathology Lab Management
+router.get('/labs', adminAuth, adminLabController.getLabs);
+router.get('/labs/:id', adminAuth, adminLabController.getLabDetail);
+router.put('/labs/:id/toggle-status', adminAuth, adminLabController.toggleLabStatus);
+router.get('/labs/:id/bookings', adminAuth, adminLabController.getLabBookings);
+router.get('/labs/:id/transactions', adminAuth, adminLabController.getLabTransactions);
+router.get('/labs/:id/settlements', adminAuth, adminLabController.getLabSettlements);
+
+// Pathology Bookings (global)
+router.get('/lab-bookings', adminAuth, adminLabController.getAllBookings);
+
+// Pharmacy Orders (global)
+router.get('/pharmacy-orders', adminAuth, adminPharmacyController.getAllOrders);
+router.get('/pharmacy-orders/:order_id', adminAuth, adminPharmacyController.getOrderDetail);
 
 // Commission / Profit reports (order-wise, user-wise, vendor-wise)
 router.get('/commissions/summary', adminAuth, commissionController.getCommissionSummary);
