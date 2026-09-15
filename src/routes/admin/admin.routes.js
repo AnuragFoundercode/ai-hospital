@@ -12,6 +12,9 @@ const commissionController = require('../../controllers/admin/commission.control
 const adminDoctorController = require('../../controllers/admin/doctor.controller');
 const adminPharmacyController = require('../../controllers/admin/pharmacy.controller');
 const adminLabController = require('../../controllers/admin/lab.controller');
+const adminDiagnosticController = require('../../controllers/admin/diagnostic.controller');
+const adminBloodBankController = require('../../controllers/admin/bloodbank.controller');
+const adminDeliveryController = require('../../controllers/admin/delivery.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -93,8 +96,38 @@ router.get('/labs/:id/bookings', adminAuth, adminLabController.getLabBookings);
 router.get('/labs/:id/transactions', adminAuth, adminLabController.getLabTransactions);
 router.get('/labs/:id/settlements', adminAuth, adminLabController.getLabSettlements);
 
+// Diagnostic Center Management
+router.get('/diagnostics', adminAuth, adminDiagnosticController.getDiagnostics);
+router.get('/diagnostics/:id', adminAuth, adminDiagnosticController.getDiagnosticDetail);
+router.put('/diagnostics/:id/toggle-status', adminAuth, adminDiagnosticController.toggleDiagnosticStatus);
+router.get('/diagnostics/:id/transactions', adminAuth, adminDiagnosticController.getDiagnosticTransactions);
+router.get('/diagnostics/:id/settlements', adminAuth, adminDiagnosticController.getDiagnosticSettlements);
+
+// Blood Bank Management
+router.get('/blood-banks', adminAuth, adminBloodBankController.getBloodBanks);
+router.get('/blood-banks/:id', adminAuth, adminBloodBankController.getBloodBankDetail);
+router.put('/blood-banks/:id/toggle-status', adminAuth, adminBloodBankController.toggleBloodBankStatus);
+router.get('/blood-banks/:id/transactions', adminAuth, adminBloodBankController.getBloodBankTransactions);
+router.get('/blood-banks/:id/settlements', adminAuth, adminBloodBankController.getBloodBankSettlements);
+router.get('/blood-requests', adminAuth, adminBloodBankController.getAllRequests);
+router.get('/blood-requests/:requestId', adminAuth, adminBloodBankController.getRequestDetail);
+
+// Pharmacy Delivery Partner Management
+router.get('/delivery-partners', adminAuth, adminDeliveryController.getPartners);
+router.get('/delivery-partners/:id', adminAuth, adminDeliveryController.getPartnerDetail);
+router.put('/delivery-partners/:id/toggle-status', adminAuth, adminDeliveryController.togglePartnerStatus);
+router.get('/delivery-partners/:id/transactions', adminAuth, adminDeliveryController.getPartnerTransactions);
+router.get('/delivery-partners/:id/settlements', adminAuth, adminDeliveryController.getPartnerSettlements);
+router.get('/deliveries', adminAuth, adminDeliveryController.getDeliveries);
+router.get('/deliveries/:requestId', adminAuth, adminDeliveryController.getDeliveryDetail);
+
+// Diagnostic Bookings (global)
+router.get('/diagnostic-bookings', adminAuth, adminDiagnosticController.getAllBookings);
+router.get('/diagnostic-bookings/:booking_id', adminAuth, adminDiagnosticController.getBookingDetail);
+
 // Pathology Bookings (global)
 router.get('/lab-bookings', adminAuth, adminLabController.getAllBookings);
+router.get('/lab-bookings/:booking_id', adminAuth, adminLabController.getBookingDetail);
 
 // Pharmacy Orders (global)
 router.get('/pharmacy-orders', adminAuth, adminPharmacyController.getAllOrders);

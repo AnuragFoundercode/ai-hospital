@@ -345,6 +345,110 @@ const getAllBookings = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/admin/lab-bookings/:booking_id
+ * Complete pathology booking view.
+ */
+const getBookingDetail = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT b.*, u.uuid AS user_uuid, u.full_name AS patient_name, u.mobile AS patient_mobile, u.email AS patient_email,
+              l.uuid AS lab_uuid, l.name AS lab_name, l.owner_name AS lab_owner, l.mobile AS lab_mobile,
+              l.address_line1 AS lab_addr1, l.address_line2 AS lab_addr2, l.city AS lab_city, l.state AS lab_state, l.pincode AS lab_pincode,
+              l.zone_id, z.name AS zone_name
+       FROM bookings b
+       JOIN users u ON b.user_id = u.id
+       LEFT JOIN pathology_labs l ON b.provider_id = l.id
+       LEFT JOIN zones z ON l.zone_id = z.id
+       WHERE b.booking_id = ? AND b.service_type = 'pathology_test'`,
+      [req.params.booking_id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Booking not found.' });
+    const b = rows[0];
+    const md = typeof b.metadata === 'string' ? JSON.parse(b.metadata || '{}') : (b.metadata || {});
+
+    // Collection request (collector + tracking)
+    const [scrRows] = await pool.query(
+      `SELECT scr.*, sc.uuid AS collector_uuid, sc.full_name AS collector_name, sc.mobile AS collector_mobile, sc.profile_photo_url AS collector_photo
+       FROM sample_collection_requests scr LEFT JOIN sample_collectors sc ON scr.collector_id = sc.id
+       WHERE scr.booking_id = ? ORDER BY scr.id DESC LIMIT 1`,
+      [b.id]
+    );
+    const scr = scrRows[0] || null;
+
+    // Timeline from booking_status_history
+    const [hist] = await pool.query(
+      'SELECT to_status, remarks, created_at FROM booking_status_history WHERE booking_id = ? ORDER BY created_at ASC',
+      [b.id]
+    );
+
+    const tests = md.tests || [];
+    const testsTotal = tests.reduce((s, t) => s + (parseFloat(t.price) || 0), 0);
+
+    return res.status(200).json({
+      message: 'Booking detail fetched.',
+      data: {
+        booking_information: {
+          booking_id: b.booking_id,
+          booking_date: b.created_at,
+          scheduled_date: b.booking_date,
+          slot_time: b.slot_start_time,
+          status: b.status,
+          payment_status: b.payment_status,
+          zone: b.zone_name,
+          payment_method: b.payment_method,
+          transaction_id: b.transaction_id,
+          collection_type: md.collection_type || null,
+        },
+        customer_information: {
+          patient_name: md.patient?.name || b.patient_name,
+          mobile: md.patient?.mobile || b.patient_mobile,
+          email: md.patient?.email || b.patient_email,
+          age: md.patient?.age || null,
+          gender: md.patient?.gender || null,
+          address: md.address || md.collection_address || null,
+        },
+        lab_information: {
+          id: b.lab_uuid,
+          lab_name: b.lab_name,
+          contact_person: b.lab_owner,
+          mobile: b.lab_mobile,
+          address: [b.lab_addr1, b.lab_addr2, b.lab_city, b.lab_state, b.lab_pincode].filter(Boolean).join(', '),
+        },
+        collection_partner: scr && scr.collector_uuid ? {
+          id: scr.collector_uuid,
+          name: scr.collector_name,
+          mobile: scr.collector_mobile,
+          profile_photo: scr.collector_photo,
+          collection_status: scr.status,
+          assigned_time: scr.assigned_at,
+          reached_time: scr.reached_at,
+          collected_time: scr.collected_at,
+          delivered_to_lab_time: scr.delivered_at,
+        } : null,
+        tests: {
+          items: tests.map((t) => ({ name: t.name, price: t.price })),
+          total_tests: tests.length,
+          total_test_amount: testsTotal,
+        },
+        payment_summary: {
+          test_amount: parseFloat(b.base_amount) || testsTotal,
+          collection_charge: md.collection_charge || 0,
+          discount: parseFloat(b.discount_amount) || 0,
+          tax_amount: parseFloat(b.tax_amount) || 0,
+          total_amount: parseFloat(b.final_amount) || 0,
+        },
+        reports: md.reports && md.reports.length ? md.reports : [],
+        order_timeline: hist.map((h) => ({ status: h.to_status, remarks: h.remarks, time: h.created_at })),
+        booking_notes: b.user_notes || md.notes || null,
+      },
+    });
+  } catch (error) {
+    console.error('admin getBookingDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getLabs,
   getLabDetail,
@@ -353,4 +457,5 @@ module.exports = {
   getLabTransactions,
   getLabSettlements,
   getAllBookings,
+  getBookingDetail,
 };
