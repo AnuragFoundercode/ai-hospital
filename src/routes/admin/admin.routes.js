@@ -15,6 +15,11 @@ const adminLabController = require('../../controllers/admin/lab.controller');
 const adminDiagnosticController = require('../../controllers/admin/diagnostic.controller');
 const adminBloodBankController = require('../../controllers/admin/bloodbank.controller');
 const adminDeliveryController = require('../../controllers/admin/delivery.controller');
+const adminAmbulanceController = require('../../controllers/admin/ambulance.controller');
+const adminCollectorController = require('../../controllers/admin/collector.controller');
+const adminBloodDeliveryController = require('../../controllers/admin/blood-delivery.controller');
+const adminMasterController = require('../../controllers/admin/masterdata.controller');
+const adminSettlementController = require('../../controllers/admin/settlement.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -120,6 +125,45 @@ router.get('/delivery-partners/:id/transactions', adminAuth, adminDeliveryContro
 router.get('/delivery-partners/:id/settlements', adminAuth, adminDeliveryController.getPartnerSettlements);
 router.get('/deliveries', adminAuth, adminDeliveryController.getDeliveries);
 router.get('/deliveries/:requestId', adminAuth, adminDeliveryController.getDeliveryDetail);
+
+// Ambulance (Services) Management
+router.get('/ambulance-services', adminAuth, adminAmbulanceController.getServices);
+router.get('/ambulance-services/:id', adminAuth, adminAmbulanceController.getServiceDetail);
+router.put('/ambulance-services/:id/toggle-status', adminAuth, adminAmbulanceController.toggleServiceStatus);
+router.get('/ambulance-services/:id/transactions', adminAuth, adminAmbulanceController.getServiceTransactions);
+router.get('/ambulance-services/:id/settlements', adminAuth, adminAmbulanceController.getServiceSettlements);
+router.get('/ambulance-bookings', adminAuth, adminAmbulanceController.getBookings);
+router.get('/ambulance-bookings/:bookingId', adminAuth, adminAmbulanceController.getBookingDetail);
+
+// Sample Collection (Collector) Management
+router.get('/collectors', adminAuth, adminCollectorController.getCollectors);
+router.get('/collectors/:id', adminAuth, adminCollectorController.getCollectorDetail);
+router.put('/collectors/:id/toggle-status', adminAuth, adminCollectorController.toggleCollectorStatus);
+router.get('/collectors/:id/transactions', adminAuth, adminCollectorController.getCollectorTransactions);
+router.get('/collectors/:id/settlements', adminAuth, adminCollectorController.getCollectorSettlements);
+router.get('/collections', adminAuth, adminCollectorController.getCollections);
+router.get('/collections/:requestId', adminAuth, adminCollectorController.getCollectionDetail);
+
+// Blood Delivery Partner Management
+router.get('/blood-delivery-partners', adminAuth, adminBloodDeliveryController.getPartners);
+router.get('/blood-delivery-partners/:id', adminAuth, adminBloodDeliveryController.getPartnerDetail);
+router.put('/blood-delivery-partners/:id/toggle-status', adminAuth, adminBloodDeliveryController.togglePartnerStatus);
+router.get('/blood-delivery-partners/:id/transactions', adminAuth, adminBloodDeliveryController.getPartnerTransactions);
+router.get('/blood-delivery-partners/:id/settlements', adminAuth, adminBloodDeliveryController.getPartnerSettlements);
+router.get('/blood-deliveries', adminAuth, adminBloodDeliveryController.getDeliveries);
+router.get('/blood-deliveries/:requestId', adminAuth, adminBloodDeliveryController.getDeliveryDetail);
+
+// Master Data Management (entity: vehicle-types | medicine-categories | ambulance-types)
+router.get('/master/:entity', adminAuth, adminMasterController.list);
+router.post('/master/:entity', adminAuth, adminMasterController.create);
+router.put('/master/:entity/:id/toggle-status', adminAuth, adminMasterController.toggleStatus);
+router.put('/master/:entity/:id', adminAuth, adminMasterController.update);
+
+// Unified Settlements (Withdrawals) Management
+router.get('/settlements', adminAuth, adminSettlementController.getSettlements);
+router.put('/settlements/:vendorType/:id/approve', adminAuth, adminSettlementController.approveSettlement);
+router.put('/settlements/:vendorType/:id/reject', adminAuth, adminSettlementController.rejectSettlement);
+router.put('/settlements/:vendorType/:id/process', adminAuth, adminSettlementController.processSettlement);
 
 // Diagnostic Bookings (global)
 router.get('/diagnostic-bookings', adminAuth, adminDiagnosticController.getAllBookings);
