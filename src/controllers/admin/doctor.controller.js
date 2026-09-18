@@ -365,11 +365,188 @@ const toggleCategoryStatus = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/v1/admin/doctor-appointments
+ * Global doctor consultation (calls) list across all doctors.
+ * Filters: doctor_id(uuid), status, call_type, from, to, search. Pagination.
+ * + global summary (unaffected by filters).
+ */
+const getAllAppointments = async (req, res) => {
+  try {
+    const { doctor_id, status, call_type, from, to, search, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const where = ['1=1']; const params = [];
+    if (doctor_id) { where.push('d.uuid = ?'); params.push(doctor_id); }
+    if (status) { where.push('dcl.status = ?'); params.push(status); }
+    if (call_type) { where.push('dcl.call_type = ?'); params.push(call_type); }
+    if (from) { where.push('dcl.created_at >= ?'); params.push(from); }
+    if (to) { where.push('dcl.created_at <= ?'); params.push(`${to} 23:59:59`); }
+    if (search) { where.push('(dcl.call_id LIKE ? OR u.full_name LIKE ? OR u.mobile LIKE ? OR d.full_name LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`); }
+    const whereClause = where.join(' AND ');
+
+    const [[cnt]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM doctor_calls dcl
+       JOIN users u ON dcl.user_id = u.id
+       JOIN doctors d ON dcl.doctor_id = d.id
+       WHERE ${whereClause}`, params
+    );
+    const [rows] = await pool.query(
+      `SELECT dcl.call_id, dcl.call_type, dcl.status, dcl.is_free, dcl.total_minutes, dcl.total_charged,
+              dcl.doctor_earning, dcl.admin_commission, dcl.started_at, dcl.ended_at, dcl.created_at,
+              u.uuid AS user_uuid, u.full_name AS patient_name, u.mobile AS patient_mobile, u.profile_photo AS patient_photo,
+              d.uuid AS doctor_uuid, d.full_name AS doctor_name, d.mobile AS doctor_mobile
+       FROM doctor_calls dcl
+       JOIN users u ON dcl.user_id = u.id
+       JOIN doctors d ON dcl.doctor_id = d.id
+       WHERE ${whereClause} ORDER BY dcl.created_at DESC LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+
+    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).toISOString().split('T')[0];
+    const [[summary]] = await pool.query(
+      `SELECT COUNT(*) AS total,
+              SUM(DATE(created_at) = ?) AS today,
+              SUM(status = 'ongoing') AS live,
+              SUM(status = 'completed') AS completed,
+              SUM(status IN ('cancelled','rejected','missed')) AS cancelled
+       FROM doctor_calls`, [today]
+    );
+
+    return res.status(200).json({
+      message: 'Doctor appointments fetched.',
+      summary: {
+        total_consultations: summary.total,
+        todays_consultations: Number(summary.today) || 0,
+        live_consultations: Number(summary.live) || 0,
+        completed_consultations: Number(summary.completed) || 0,
+        cancelled_consultations: Number(summary.cancelled) || 0,
+      },
+      data: rows.map((r) => ({
+        booking_id: r.call_id,
+        patient_name: r.patient_name,
+        patient: { id: r.user_uuid, name: r.patient_name, mobile: r.patient_mobile, profile_photo: r.patient_photo },
+        doctor: { id: r.doctor_uuid, name: r.doctor_name, mobile: r.doctor_mobile },
+        call_type: r.call_type,
+        schedule_date: r.started_at || r.created_at,
+        duration_minutes: r.total_minutes,
+        amount: r.total_charged,
+        payment_status: r.is_free ? 'free' : (parseFloat(r.total_charged) > 0 ? 'paid' : 'unpaid'),
+        status: r.status,
+        doctor_earning: r.doctor_earning,
+        admin_commission: r.admin_commission,
+        created_at: r.created_at,
+      })),
+      pagination: { page: pageNum, limit: limitNum, total: cnt.total, total_pages: Math.ceil(cnt.total / limitNum) },
+    });
+  } catch (error) {
+    console.error('admin getAllAppointments error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+/**
+ * GET /api/v1/admin/doctor-appointments/:callId
+ * Full consultation detail: participants, timing/duration, payment breakdown,
+ * clinical notes, uploaded reports & prescriptions, timeline.
+ */
+const getAppointmentDetail = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT dcl.*,
+              u.uuid AS user_uuid, u.full_name AS patient_name, u.mobile AS patient_mobile, u.email AS patient_email,
+              u.gender AS patient_gender, u.date_of_birth AS patient_dob, u.profile_photo AS patient_photo,
+              d.uuid AS doctor_uuid, d.full_name AS doctor_name, d.mobile AS doctor_mobile, d.profile_photo AS doctor_photo,
+              d.average_rating AS doctor_rating,
+              dc.name AS specialization
+       FROM doctor_calls dcl
+       JOIN users u ON dcl.user_id = u.id
+       JOIN doctors d ON dcl.doctor_id = d.id
+       LEFT JOIN doctor_categories dc ON d.category_id = dc.id
+       WHERE dcl.call_id = ?`,
+      [req.params.callId]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Consultation not found.' });
+    const c = rows[0];
+
+    const parseJson = (v) => {
+      if (!v) return [];
+      if (typeof v !== 'string') return v;
+      try { return JSON.parse(v); } catch (e) { return []; }
+    };
+    const userReports = parseJson(c.user_reports);
+    const prescriptions = parseJson(c.prescriptions);
+
+    // Duration: prefer recorded total_minutes, else derive from timestamps.
+    let durationMinutes = c.total_minutes;
+    if ((!durationMinutes || durationMinutes === 0) && c.started_at && c.ended_at) {
+      durationMinutes = Math.round((new Date(c.ended_at) - new Date(c.started_at)) / 60000);
+    }
+
+    const timeline = [{ status: 'Call Initiated', at: c.created_at }];
+    if (c.started_at) timeline.push({ status: 'Call Started', at: c.started_at });
+    if (c.ended_at) timeline.push({ status: 'Call Ended', at: c.ended_at });
+
+    return res.status(200).json({
+      message: 'Consultation detail fetched.',
+      data: {
+        consultation_info: {
+          booking_id: c.call_id,
+          channel_name: c.channel_name,
+          call_type: c.call_type,
+          is_free: !!c.is_free,
+          status: c.status,
+          ended_by: c.ended_by,
+          end_reason: c.end_reason,
+          created_at: c.created_at,
+        },
+        patient: {
+          id: c.user_uuid, name: c.patient_name, mobile: c.patient_mobile, email: c.patient_email,
+          gender: c.patient_gender, date_of_birth: c.patient_dob, profile_photo: c.patient_photo,
+        },
+        doctor: {
+          id: c.doctor_uuid, name: c.doctor_name, mobile: c.doctor_mobile, profile_photo: c.doctor_photo,
+          specialization: c.specialization, rating: c.doctor_rating,
+        },
+        timing: {
+          started_at: c.started_at,
+          ended_at: c.ended_at,
+          duration_minutes: durationMinutes || 0,
+          max_duration_minutes: c.max_duration_minutes,
+        },
+        payment: {
+          is_free: !!c.is_free,
+          per_minute_fee: c.per_minute_fee,
+          total_minutes: c.total_minutes,
+          total_charged: c.total_charged,
+          doctor_earning: c.doctor_earning,
+          admin_commission: c.admin_commission,
+          payment_status: c.is_free ? 'free' : (parseFloat(c.total_charged) > 0 ? 'paid' : 'unpaid'),
+        },
+        clinical: {
+          diagnosis: c.diagnosis || null,
+          doctor_notes: c.doctor_notes || null,
+          prescriptions,
+          user_reports: userReports,
+        },
+        timeline,
+      },
+    });
+  } catch (error) {
+    console.error('admin getAppointmentDetail error:', error.message);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 module.exports = {
   getDoctors,
   toggleDoctorStatus,
   getDoctorDetail,
   getDoctorAppointments,
+  getAllAppointments,
+  getAppointmentDetail,
   getDoctorTransactions,
   getDoctorWithdrawals,
   getCategories,

@@ -20,6 +20,7 @@ const adminCollectorController = require('../../controllers/admin/collector.cont
 const adminBloodDeliveryController = require('../../controllers/admin/blood-delivery.controller');
 const adminMasterController = require('../../controllers/admin/masterdata.controller');
 const adminSettlementController = require('../../controllers/admin/settlement.controller');
+const adminDashboardController = require('../../controllers/admin/dashboard.controller');
 const adminAuth = require('../../middlewares/admin/admin.auth');
 
 // ─────────────────────────────────────────────
@@ -70,6 +71,9 @@ router.get('/vendors/:type/:id', adminAuth, vendorController.getVendorDetail);
 router.put('/vendors/:type/:id/approve', adminAuth, vendorController.approveVendor);
 router.put('/vendors/:type/:id/reject', adminAuth, vendorController.rejectVendor);
 
+// Dashboard
+router.get('/dashboard', adminAuth, adminDashboardController.getDashboard);
+
 // Doctor Management
 router.get('/doctors', adminAuth, adminDoctorController.getDoctors);
 router.get('/doctors/:id', adminAuth, adminDoctorController.getDoctorDetail);
@@ -77,6 +81,8 @@ router.put('/doctors/:id/toggle-status', adminAuth, adminDoctorController.toggle
 router.get('/doctors/:id/appointments', adminAuth, adminDoctorController.getDoctorAppointments);
 router.get('/doctors/:id/transactions', adminAuth, adminDoctorController.getDoctorTransactions);
 router.get('/doctors/:id/withdrawals', adminAuth, adminDoctorController.getDoctorWithdrawals);
+router.get('/doctor-appointments', adminAuth, adminDoctorController.getAllAppointments);
+router.get('/doctor-appointments/:callId', adminAuth, adminDoctorController.getAppointmentDetail);
 
 // Doctor Categories (specializations)
 router.get('/doctor-categories', adminAuth, adminDoctorController.getCategories);
